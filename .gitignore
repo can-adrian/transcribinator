@@ -1,0 +1,28 @@
+# --- app data (never commit: recordings and their sidecars) ---
+media/
+*_transcript.json
+*_converted.mp4
+*.part.mp4
+
+# legacy in-folder config (pre-1.8; now lives in the user config dir)
+syn_config.json
+synonyms.json
+
+# --- python ---
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# --- rez / build ---
+build/
+.rez/
+package.pyc
+
+# --- editors / OS ---
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+nohup.out
