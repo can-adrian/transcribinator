@@ -114,7 +114,7 @@ MEDIA_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".mp3", ".wav", ".m4a", "
 MODEL_SIZE = os.environ.get("WHISPER_MODEL", "medium")
 ARGOS_DIR = _env("ARGOS_DIR")
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
-APP_VERSION = "1.12.1"
+APP_VERSION = "1.13.0"
 
 app = FastAPI(title=APP_NAME)
 
@@ -280,21 +280,23 @@ def _getModel():
         return _model
 
 
-def _transcribe(relPath):
-    rel = Path(relPath)
-    stem = rel.with_suffix("").as_posix()
-    _status[stem] = "running"
-    tmpWav = Path(tempfile.gettempdir()) / f"{stem.replace('/', '_')}_extract.wav"
+def _runTranscription(src, dst, label, onProgress=None):
+    """Transcribe any file on disk and write its sidecar. Raises on failure.
+
+    src/dst are absolute paths; label is what appears in log lines.
+    onProgress(pct) is called as segments arrive.
+    """
+    tmpWav = Path(tempfile.gettempdir()) / f"{abs(hash(str(src)))}_extract.wav"
     try:
         # pre-extract clean mono 16k wav — sidesteps container/codec issues
         # that make whisper's internal decoder stop after a few seconds
         subprocess.run(
-            [FFMPEG, "-y", "-i", str(_mediaRoot() / rel), "-vn",
+            [FFMPEG, "-y", "-i", str(src), "-vn",
              "-ac", "1", "-ar", "16000", "-map", "0:a:0", str(tmpWav)],
             check=True, capture_output=True)
 
         model = _getModel()
-        print(f"[transcribe] {relPath}: starting", flush=True)
+        print(f"[transcribe] {label}: starting", flush=True)
         t0 = time.time()
         segments, info = model.transcribe(
             str(tmpWav),
@@ -316,27 +318,41 @@ def _transcribe(relPath):
                 ],
             })
             pct = int(seg.end / info.duration * 100) if info.duration else 0
-            _status[stem] = f"running:{min(pct, 99)}"
+            if onProgress:
+                onProgress(min(pct, 99))
             if pct >= lastPrinted + 10:
-                print(f"[transcribe] {relPath}: {pct}%  "
+                print(f"[transcribe] {label}: {pct}%  "
                       f"({seg.end:.0f}s / {info.duration:.0f}s)", flush=True)
                 lastPrinted = pct
         data = {
-            "file": rel.as_posix(),
+            "file": Path(label).as_posix(),
             "language": info.language,
             "duration": round(info.duration, 3),
             "model": MODEL_SIZE,
             "created": time.time(),
             "segments": outSegments,
         }
-        _writeTranscript(_transcriptPath(stem), data)
-        _status.pop(stem, None)
-        print(f"[transcribe] {relPath}: done — {info.duration:.0f}s of audio "
-              f"in {time.time() - t0:.0f}s, {len(outSegments)} segments", flush=True)
-    except Exception as exc:  # noqa: BLE001
-        _status[stem] = f"error:{exc}"
+        _writeTranscript(dst, data)
+        print(f"[transcribe] {label}: done — {info.duration:.0f}s of audio "
+              f"in {time.time() - t0:.0f}s, {len(outSegments)} segments",
+              flush=True)
+        return data
     finally:
         tmpWav.unlink(missing_ok=True)
+
+
+def _transcribe(relPath):
+    """Queue worker: transcribe a file relative to the media root."""
+    rel = Path(relPath)
+    stem = rel.with_suffix("").as_posix()
+    _status[stem] = "running"
+    try:
+        _runTranscription(
+            _mediaRoot() / rel, _transcriptPath(stem), rel.as_posix(),
+            onProgress=lambda pct: _status.__setitem__(stem, f"running:{pct}"))
+        _status.pop(stem, None)
+    except Exception as exc:  # noqa: BLE001
+        _status[stem] = f"error:{exc}"
 
 
 def _worker():
@@ -407,29 +423,35 @@ _INSTALL_HINT = (
     "team to add the pack to the environment.")
 
 
+def _runTranslation(path, lang, label, onProgress=None):
+    """Translate the segments in a transcript sidecar. Raises on failure."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    tr = _argosTranslator(lang)
+    if tr is None:
+        raise RuntimeError(_INSTALL_HINT.format(lang=lang))
+    segs = data.get("segments", [])
+    print(f"[translate] {label} -> {lang}: {len(segs)} segments", flush=True)
+    t0 = time.time()
+    out = []
+    for i, s in enumerate(segs):
+        out.append(tr.translate(s["text"]) if s["text"] else "")
+        if onProgress and i % 10 == 0:
+            onProgress(int(i / max(len(segs), 1) * 100))
+    data.setdefault("translations", {})[lang] = out
+    _writeTranscript(path, data)
+    print(f"[translate] {label} -> {lang}: done in {time.time()-t0:.0f}s",
+          flush=True)
+    return data
+
+
 def _translateJob(stem, lang):
     key = f"{stem}:{lang}"
     _transStatus[key] = "running"
     try:
-        path = _transcriptPath(stem)
-        data = json.loads(path.read_text(encoding="utf-8"))
-        tr = _argosTranslator(lang)
-        if tr is None:
-            _transStatus[key] = "error:" + _INSTALL_HINT.format(lang=lang)
-            return
-        segs = data.get("segments", [])
-        print(f"[translate] {stem} -> {lang}: {len(segs)} segments", flush=True)
-        t0 = time.time()
-        out = []
-        for i, s in enumerate(segs):
-            out.append(tr.translate(s["text"]) if s["text"] else "")
-            if i % 10 == 0:
-                _transStatus[key] = f"running:{int(i / max(len(segs), 1) * 100)}"
-        data.setdefault("translations", {})[lang] = out
-        _writeTranscript(path, data)
+        _runTranslation(
+            _transcriptPath(stem), lang, stem,
+            onProgress=lambda pct: _transStatus.__setitem__(key, f"running:{pct}"))
         _transStatus.pop(key, None)
-        print(f"[translate] {stem} -> {lang}: done in {time.time()-t0:.0f}s",
-              flush=True)
     except ModuleNotFoundError:
         _transStatus[key] = ("error:argostranslate is not available in this "
                              "environment — subtitle translation is disabled")
@@ -512,16 +534,12 @@ def _mediaDuration(path):
     return int(h) * 3600 + int(mn) * 60 + float(s)
 
 
-def _convertJob(relPath):
-    rel = Path(relPath)
-    stem = rel.with_suffix("").as_posix()
-    _convStatus[stem] = "running"
-    src = _mediaRoot() / rel
-    dst = _convertedPath(stem)
+def _runConvert(src, dst, label, onProgress=None):
+    """Transcode any file to a browser-playable h264 mp4. Raises on failure."""
     tmp = dst.with_suffix(".part.mp4")
     try:
         dur = _mediaDuration(src)
-        print(f"[convert] {relPath}: starting ({dur:.0f}s)", flush=True)
+        print(f"[convert] {label}: starting ({dur:.0f}s)", flush=True)
         t0 = time.time()
         proc = subprocess.Popen(
             [FFMPEG, "-y", "-i", str(src),
@@ -531,26 +549,40 @@ def _convertJob(relPath):
              "-progress", "pipe:1", "-nostats", str(tmp)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             errors="replace")
-        lastPrinted = -10
+        lastPrinted = -20
         for line in proc.stdout:
             if line.startswith("out_time_us=") and dur:
                 us = line.strip().split("=")[1]
                 if us.isdigit():
                     pct = min(int(int(us) / 1e6 / dur * 100), 99)
-                    _convStatus[stem] = f"running:{pct}"
+                    if onProgress:
+                        onProgress(pct)
                     if pct >= lastPrinted + 20:
-                        print(f"[convert] {relPath}: {pct}%", flush=True)
+                        print(f"[convert] {label}: {pct}%", flush=True)
                         lastPrinted = pct
         proc.wait()
         if proc.returncode != 0:
             tail = (proc.stderr.read() or "").strip().splitlines()
-            raise RuntimeError(tail[-1] if tail else f"ffmpeg exit {proc.returncode}")
+            raise RuntimeError(tail[-1] if tail else
+                               f"ffmpeg exit {proc.returncode}")
         tmp.replace(dst)
-        _convStatus.pop(stem, None)
-        print(f"[convert] {relPath}: done in {time.time() - t0:.0f}s -> "
+        print(f"[convert] {label}: done in {time.time() - t0:.0f}s -> "
               f"{dst.name}", flush=True)
-    except Exception as exc:  # noqa: BLE001
+    except BaseException:
         tmp.unlink(missing_ok=True)
+        raise
+
+
+def _convertJob(relPath):
+    rel = Path(relPath)
+    stem = rel.with_suffix("").as_posix()
+    _convStatus[stem] = "running"
+    try:
+        _runConvert(
+            _mediaRoot() / rel, _convertedPath(stem), rel.as_posix(),
+            onProgress=lambda pct: _convStatus.__setitem__(stem, f"running:{pct}"))
+        _convStatus.pop(stem, None)
+    except Exception as exc:  # noqa: BLE001
         _convStatus[stem] = f"error:{exc}"
 
 
@@ -857,10 +889,126 @@ def _openBrowser(url):
     threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
 
-if __name__ == "__main__":
+def _collectMedia(paths, recursive):
+    """Expand files/folders into a list of media files, skipping proxies."""
+    out = []
+    for p in paths:
+        path = Path(p).expanduser()
+        if path.is_dir():
+            it = path.rglob("*") if recursive else path.glob("*")
+            out += sorted(f for f in it
+                          if f.is_file() and f.suffix.lower() in MEDIA_EXTS
+                          and not f.name.endswith(CONVERTED_SUFFIX))
+        elif path.is_file():
+            out.append(path)
+        else:
+            print(f"not found: {path}", flush=True)
+    return out
+
+
+def _cliTranscribe(args):
+    files = _collectMedia(args.paths, args.recursive)
+    if not files:
+        print("nothing to do", flush=True)
+        return 1
+    langs = [l.strip() for l in (args.translate or "").split(",") if l.strip()]
+    bad = [l for l in langs if l not in SUB_LANGS]
+    if bad:
+        print(f"unknown language(s): {', '.join(bad)} "
+              f"(known: {', '.join(SUB_LANGS)})", flush=True)
+        return 2
+
+    print(f"{len(files)} file(s) to process", flush=True)
+    failed = 0
+    for i, src in enumerate(files, 1):
+        label = src.name
+        dst = src.with_name(f"{src.stem}_transcript.json")
+        print(f"--- [{i}/{len(files)}] {src}", flush=True)
+        ok = True
+
+        # transcription
+        try:
+            if dst.exists() and not args.force:
+                owner = _sidecarOwner(dst)
+                if owner not in (None, src.name):
+                    raise RuntimeError(f"{dst.name} belongs to '{owner}' — "
+                                       f"rename one of the files")
+                print("  transcript exists, skipping (use --force to redo)",
+                      flush=True)
+            else:
+                _runTranscription(src, dst, label)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  transcribe FAILED: {exc}", flush=True)
+            ok = False
+
+        # conversion is independent of transcription
+        if args.convert:
+            conv = src.with_name(f"{src.stem}{CONVERTED_SUFFIX}")
+            try:
+                if conv.exists() and not args.force:
+                    print("  converted copy exists, skipping", flush=True)
+                else:
+                    _runConvert(src, conv, label)
+            except Exception as exc:  # noqa: BLE001
+                print(f"  convert FAILED: {exc}", flush=True)
+                ok = False
+
+        # translation needs a transcript
+        for lang in langs:
+            try:
+                if not dst.exists():
+                    raise RuntimeError("no transcript to translate")
+                data = json.loads(dst.read_text(encoding="utf-8"))
+                if lang in data.get("translations", {}) and not args.force:
+                    print(f"  {lang} translation exists, skipping", flush=True)
+                    continue
+                _runTranslation(dst, lang, label)
+            except Exception as exc:  # noqa: BLE001
+                print(f"  translate {lang} FAILED: {exc}", flush=True)
+                ok = False
+
+        if not ok:
+            failed += 1
+
+    done = len(files) - failed
+    print(f"=== {done} ok, {failed} failed", flush=True)
+    return 1 if failed else 0
+
+
+def _buildParser():
+    import argparse
+    p = argparse.ArgumentParser(
+        prog=APP_SLUG,
+        description=f"{APP_NAME} — offline transcription, search and "
+                    f"subtitling for recorded calls. With no arguments, "
+                    f"starts the web app.")
+    p.add_argument("--version", action="version",
+                   version=f"{APP_NAME} {APP_VERSION}")
+    sub = p.add_subparsers(dest="command")
+
+    t = sub.add_parser("transcribe",
+                       help="transcribe files or folders from the command line")
+    t.add_argument("paths", nargs="+", metavar="PATH",
+                   help="media files, or folders to scan")
+    t.add_argument("-r", "--recursive", action="store_true",
+                   help="recurse into subfolders when given a folder")
+    t.add_argument("-f", "--force", action="store_true",
+                   help="redo work even if the output already exists")
+    t.add_argument("-c", "--convert", action="store_true",
+                   help="also write a browser-playable _converted.mp4")
+    t.add_argument("--translate", metavar="LANGS",
+                   help=f"also translate, comma separated "
+                        f"({', '.join(SUB_LANGS)})")
+
+    s = sub.add_parser("serve", help="start the web app (the default)")
+    s.add_argument("--port", type=int, default=None, help="override the port")
+    return p
+
+
+def _serve(portOverride=None):
     import sys
 
-    port = PORT
+    port = portOverride or PORT
     if not _portFree(port):
         if _isOurServer(port):
             # already running — just bring it up in the browser and exit
@@ -868,14 +1016,15 @@ if __name__ == "__main__":
             print(f"{APP_NAME} is already running at {url} — opening it.",
                   flush=True)
             _openBrowser(url)
-            sys.exit(0)
+            return 0
         # something else owns the port: move to the next free one
-        port = next((p for p in range(PORT + 1, PORT + 21) if _portFree(p)), None)
+        port = next((p for p in range(port + 1, port + 21) if _portFree(p)), None)
         if port is None:
-            sys.exit(f"ERROR: ports {PORT}-{PORT + 20} are all in use. "
-                     "Set TRANSCRIBINATOR_PORT to choose another.")
-        print(f"NOTE: port {PORT} is taken by another program — using {port}.",
-              flush=True)
+            print(f"ERROR: ports {PORT}-{PORT + 20} are all in use. "
+                  "Set TRANSCRIBINATOR_PORT to choose another.", flush=True)
+            return 1
+        print(f"NOTE: port {portOverride or PORT} is taken by another program "
+              f"— using {port}.", flush=True)
 
     url = f"http://127.0.0.1:{port}"
     if _indexPath() is None:
@@ -887,3 +1036,13 @@ if __name__ == "__main__":
           flush=True)
     _openBrowser(url)
     uvicorn.run(app, host="127.0.0.1", port=port, access_log=False)
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    parsed = _buildParser().parse_args()
+    if parsed.command == "transcribe":
+        sys.exit(_cliTranscribe(parsed))
+    sys.exit(_serve(getattr(parsed, "port", None)))
