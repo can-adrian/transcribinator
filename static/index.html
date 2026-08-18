@@ -989,7 +989,7 @@ window.addEventListener('resize',()=>{
 /* ---------------- annotations ---------------- */
 let annotations=[];        // {time, text, user?} — persisted inside the transcript json
 let currentUser='';
-const EXPECTED_SERVER='1.12.1';
+const EXPECTED_SERVER='1.13.0';
 fetch('/api/whoami').then(r=>r.json()).then(d=>{
   currentUser=d.user||'';
   if(d.version!==EXPECTED_SERVER)showVerWarn(d.version||'pre-1.3');

@@ -12,7 +12,7 @@ the next free one is used. Stop it with the ⏻ button in the app, or by closing
 the console.
 
 The startup line reports the version and active media root, e.g.
-`Transcribinator v1.12.1 — model=medium  media=D:\shows\...`.
+`Transcribinator v1.13.0 — model=medium  media=D:\shows\...`.
 
 ## Setup
 
@@ -47,6 +47,29 @@ They are installed on first use, and logged as `[argos]` lines. Without them
 everything except subtitle translation works normally.
 
 Both can be set studio-wide in `post_commands()` in `package.py`.
+
+## Command line
+
+With no arguments the app starts the web UI. It can also run headless, which
+is handy for batch or overnight work:
+
+    transcribinator transcribe CALL.mov
+    transcribinator transcribe /shows/hnd/calls -r
+    transcribinator transcribe /shows/hnd/calls -r -c --translate sv,fr
+
+    -r, --recursive   recurse into subfolders
+    -f, --force       redo work even if the output exists
+    -c, --convert     also write a browser-playable _converted.mp4
+    --translate       comma separated: sv, es, fr, de
+
+Sidecars are written next to each source file exactly as the UI writes them,
+so anything processed this way is immediately searchable in the app. Existing
+outputs are skipped unless `--force` is given, which makes re-running over a
+folder cheap. Each step (transcribe / convert / translate) reports separately
+and one failing does not stop the others; the exit code is non-zero if
+anything failed.
+
+Without rez, the same commands are `python server.py transcribe ...`.
 
 ## Using it
 
