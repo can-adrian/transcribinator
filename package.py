@@ -1,6 +1,6 @@
 name = "transcribinator"
 
-version = "1.11.1"       # keep in sync with APP_VERSION in server.py
+version = "1.12.1"       # keep in sync with APP_VERSION in server.py
                         # (build.py fails the build if these drift)
 
 description = "Transcribinator — offline transcription, search, annotation " \
@@ -10,12 +10,8 @@ description = "Transcribinator — offline transcription, search, annotation " \
 authors = ["adrian"]
 
 # --- dependencies ------------------------------------------------------------
-# Adjust to match the packages that exist in your repo. The python libraries
-# below are the app's actual imports; if you don't have rez packages for them,
-# build with --vendor to bake them into the package payload instead:
-#
-#     rez-build --install -- --vendor
-#
+# The app's python imports, to be resolved as packages in your repo.
+# Uncomment / rename to match the package names your studio uses.
 requires = [
     "python-3.9+<3.13",
     # "fastapi",
@@ -38,17 +34,17 @@ build_command = "python {root}/build.py {install}"
 def commands():
     env.TRANSCRIBINATOR_ROOT = "{root}"
 
-    # vendored python deps, present only when built with --vendor
-    import os.path
-    vendor = os.path.join("{root}", "vendor")
-    if os.path.isdir(vendor):
-        env.PYTHONPATH.append(vendor)
-
     alias("transcribinator", "python {root}/server.py")
 
 
 def post_commands():
-    # A studio-wide default root can be set here, e.g.
+    # No internet at runtime: skip the HuggingFace reachability check so model
+    # loading uses the local cache immediately instead of timing out first.
+    env.HF_HUB_OFFLINE = "1"
+
+    # Studio-wide defaults can be set here, e.g.
     #   env.TRANSCRIBINATOR_MEDIA = "/shows/{env.SHOW}/client_calls"
-    # Users can still change it in the UI; their choice is stored per-user.
+    #   env.WHISPER_MODEL = "/tools/models/faster-whisper-medium"
+    #   env.TRANSCRIBINATOR_ARGOS_DIR = "/tools/models/argos"
+    # Users can still change the media root in the UI; it is stored per-user.
     pass

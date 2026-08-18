@@ -12,18 +12,41 @@ the next free one is used. Stop it with the ⏻ button in the app, or by closing
 the console.
 
 The startup line reports the version and active media root, e.g.
-`Transcribinator v1.11.0 — model=medium  media=D:\shows\...`.
+`Transcribinator v1.12.1 — model=medium  media=D:\shows\...`.
 
 ## Setup
 
-    python -m venv venv && venv\Scripts\activate
-    pip install -r requirements.txt
-    # optional, one-time while online — pre-cache the speech model:
-    python -c "from faster_whisper import WhisperModel; WhisperModel('medium')"
+Python dependencies (see `requirements.txt`) are expected to be provided by
+the environment — a rez package, or however your studio provisions
+site-packages. Nothing here installs them.
 
-Offline translation (optional) needs the language packs once, while online:
+Two model sets must also be staged locally, since there is no internet access
+at runtime:
 
-    python install_langs.py          # en -> sv, es, fr, de
+**Speech model** — `WHISPER_MODEL` takes either a size name (`small`,
+`medium`, `large-v3`) or a path to a converted faster-whisper model folder on
+disk:
+
+    set WHISPER_MODEL=\\tools\models\faster-whisper-medium
+
+A size name only works if that model is already in the local HuggingFace
+cache — per user, `%USERPROFILE%\.cache\huggingface\hub` (or
+`~/.cache/huggingface/hub`), overridable with `HF_HOME`. A path avoids the
+cache question entirely.
+
+With no internet, also set `HF_HUB_OFFLINE=1` so model loading reads the cache
+directly instead of waiting on a network timeout first. `package.py` sets this
+in `post_commands()`.
+
+**Translation packs** (optional, for subtitles) — put the `.argosmodel` files
+in a folder and point at it:
+
+    set TRANSCRIBINATOR_ARGOS_DIR=\\tools\models\argos
+
+They are installed on first use, and logged as `[argos]` lines. Without them
+everything except subtitle translation works normally.
+
+Both can be set studio-wide in `post_commands()` in `package.py`.
 
 ## Using it
 
@@ -77,17 +100,15 @@ hand-editing any JSON.
 
 ## Deploying as a rez package
 
-    rez-build --install                  # deps resolved as rez packages
-    rez-build --install -- --vendor      # or bake pip deps into the payload
+    rez-build --install
     rez-release
 
 Then, for users:
 
     rez-env transcribinator -- transcribinator
 
-`package.py` lists the python library dependencies commented out — enable the
-ones your repo has packages for, or use `--vendor` to pip-install them into
-`{root}/vendor` (added to PYTHONPATH by `commands()`).
+`package.py` lists the python library dependencies commented out — enable and
+rename them to match the packages in your repo.
 
 Nothing is written inside the install root, so the released package can be
 read-only. Per-user state lives in a config dir:

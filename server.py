@@ -1,19 +1,24 @@
 """Transcribinator — offline call transcription, search and subtitling server.
 
 Usage:
-    pip install -r requirements.txt
     python server.py            # http://127.0.0.1:8765
+
+Python dependencies are expected to be provided by the environment
+(rez package, site-packages, etc). Speech and translation models must be
+staged locally too — see WHISPER_MODEL and TRANSCRIBINATOR_ARGOS_DIR below.
 
 Point the app at any media root folder (UI sidebar, or TRANSCRIBINATOR_MEDIA
 env); it is scanned for supported media. Transcripts are saved next to each
 movie as <name>_transcript.json.
 
 Environment:
-    WHISPER_MODEL              small|medium|large-v3   (default medium)
+    WHISPER_MODEL              small|medium|large-v3, or a path to a model
+                               folder staged on disk     (default medium)
     TRANSCRIBINATOR_MEDIA      initial media root folder
     TRANSCRIBINATOR_CONFIG     user config dir  (default per-user config dir)
     TRANSCRIBINATOR_PORT       listen port      (default 8765)
     TRANSCRIBINATOR_NO_BROWSER set to skip auto-opening the browser
+    TRANSCRIBINATOR_ARGOS_DIR  folder of staged .argosmodel translation packs
 
 The pre-1.11 CALL_MEDIA / CALL_SEARCH_* names are still honoured as fallbacks.
 
@@ -105,9 +110,11 @@ def _defaultMedia():
 DEFAULT_MEDIA = _defaultMedia()
 PORT = int(_env("PORT", ("CALL_SEARCH_PORT",), "8765"))
 MEDIA_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".mp3", ".wav", ".m4a", ".flac"}
+# a size name ("medium"), or a path to a locally staged converted model
 MODEL_SIZE = os.environ.get("WHISPER_MODEL", "medium")
+ARGOS_DIR = _env("ARGOS_DIR")
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
-APP_VERSION = "1.11.1"
+APP_VERSION = "1.12.1"
 
 app = FastAPI(title=APP_NAME)
 
@@ -254,8 +261,22 @@ def _getModel():
     global _model
     with _modelLock:
         if _model is None:
-            from faster_whisper import WhisperModel
-            _model = WhisperModel(MODEL_SIZE, device="auto", compute_type="auto")
+            try:
+                from faster_whisper import WhisperModel
+            except ImportError as exc:
+                raise RuntimeError(
+                    "faster-whisper is not available in this environment — "
+                    "check that the package is part of your resolved "
+                    f"context. ({exc})") from exc
+            try:
+                _model = WhisperModel(MODEL_SIZE, device="auto",
+                                      compute_type="auto")
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(
+                    f"could not load speech model '{MODEL_SIZE}'. On a machine "
+                    f"without internet the model must already be staged: set "
+                    f"WHISPER_MODEL to a local model folder, or place the model "
+                    f"in the HuggingFace cache. ({exc})") from exc
         return _model
 
 
@@ -334,19 +355,56 @@ _transStatus = {}          # "stem:lang" -> running:<pct> | error:<msg>
 _transQueue = queue.Queue()
 
 
-def _argosTranslator(lang):
+_argosTried = False
+
+
+def _installStagedArgos():
+    """Install .argosmodel packs from a local folder (no internet needed).
+
+    Point TRANSCRIBINATOR_ARGOS_DIR at a folder of .argosmodel files staged
+    on a share; they are installed on first use. Returns True if anything
+    was installed.
+    """
+    global _argosTried
+    if _argosTried or not ARGOS_DIR:
+        return False
+    _argosTried = True
+    folder = Path(ARGOS_DIR).expanduser()
+    if not folder.is_dir():
+        print(f"[argos] TRANSCRIBINATOR_ARGOS_DIR is not a folder: {folder}",
+              flush=True)
+        return False
+    from argostranslate import package
+    installed = False
+    for f in sorted(folder.glob("*.argosmodel")):
+        try:
+            package.install_from_path(str(f))
+            print(f"[argos] installed {f.name}", flush=True)
+            installed = True
+        except Exception as exc:  # noqa: BLE001
+            print(f"[argos] could not install {f.name}: {exc}", flush=True)
+    if not installed:
+        print(f"[argos] no .argosmodel files found in {folder}", flush=True)
+    return installed
+
+
+def _argosTranslator(lang, retry=True):
     from argostranslate import translate
     installed = translate.get_installed_languages()
     src = next((l for l in installed if l.code == "en"), None)
     dst = next((l for l in installed if l.code == lang), None)
-    return src.get_translation(dst) if src and dst else None
+    if src and dst:
+        return src.get_translation(dst)
+    # not there yet — try any packs staged on disk, then look again
+    if retry and _installStagedArgos():
+        return _argosTranslator(lang, retry=False)
+    return None
 
 
 _INSTALL_HINT = (
-    "language pack en->{lang} missing — while online run:  "
-    "python -c \"import argostranslate.package as p; p.update_package_index(); "
-    "[p.install_from_path(x.download()) for x in p.get_available_packages() "
-    "if x.from_code=='en' and x.to_code=='{lang}']\"")
+    "language pack en->{lang} is not installed. Stage the .argosmodel files "
+    "in a folder and point TRANSCRIBINATOR_ARGOS_DIR at it, or ask your dev "
+    "team to add the pack to the environment.")
 
 
 def _translateJob(stem, lang):
@@ -373,8 +431,8 @@ def _translateJob(stem, lang):
         print(f"[translate] {stem} -> {lang}: done in {time.time()-t0:.0f}s",
               flush=True)
     except ModuleNotFoundError:
-        _transStatus[key] = ("error:argostranslate not installed — "
-                             "pip install argostranslate")
+        _transStatus[key] = ("error:argostranslate is not available in this "
+                             "environment — subtitle translation is disabled")
     except Exception as exc:  # noqa: BLE001
         _transStatus[key] = f"error:{exc}"
 

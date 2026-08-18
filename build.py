@@ -2,8 +2,10 @@
 
 Invoked by rez via `build_command` in package.py:
 
-    rez-build --install                 # normal: expects deps as rez packages
-    rez-build --install -- --vendor     # bake pip deps into the package payload
+    rez-build --install
+
+Python dependencies are expected to come from the environment (rez packages
+or site-packages); this script only copies the payload.
 
 Outside rez it can also be used directly:
 
@@ -12,13 +14,12 @@ Outside rez it can also be used directly:
 import os
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 # index.html may live in static/ or beside server.py; both layouts work
 PAYLOAD = ["server.py", "static", "index.html", "README.md",
-           "requirements.txt", "install_langs.py"]
+           "requirements.txt"]
 
 SOURCE = Path(os.environ.get("REZ_BUILD_SOURCE_PATH", Path(__file__).parent))
 BUILD = Path(os.environ.get("REZ_BUILD_PATH", SOURCE / "build"))
@@ -64,28 +65,15 @@ def copyPayload(dest):
     print(f"build: payload -> {dest}")
 
 
-def vendorDeps(dest):
-    vendor = dest / "vendor"
-    vendor.mkdir(parents=True, exist_ok=True)
-    print(f"build: pip installing requirements into {vendor}")
-    subprocess.check_call([
-        sys.executable, "-m", "pip", "install",
-        "-r", str(SOURCE / "requirements.txt"),
-        "--target", str(vendor), "--upgrade",
-    ])
-
 
 def main():
     args = sys.argv[1:]
     doInstall = "install" in args
-    doVendor = "--vendor" in args
 
     version = checkVersions()
     print(f"build: transcribinator {version}")
 
     copyPayload(BUILD)
-    if doVendor:
-        vendorDeps(BUILD)
 
     if not doInstall:
         return
@@ -95,8 +83,6 @@ def main():
     else:
         install = Path(os.environ["REZ_BUILD_INSTALL_PATH"])
     copyPayload(install)
-    if doVendor:
-        vendorDeps(install)
     print(f"build: installed to {install}")
 
 
