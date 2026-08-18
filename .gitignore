@@ -3,6 +3,7 @@ media/
 *_transcript.json
 *_converted.mp4
 *.part.mp4
+*.patch
 
 # legacy in-folder config (pre-1.8; now lives in the user config dir)
 syn_config.json
