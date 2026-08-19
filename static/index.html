@@ -27,6 +27,8 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 #appTitle{padding:11px 12px 11px 16px;border-bottom:1px solid var(--line);
   font:600 12px/1 var(--mono);letter-spacing:.13em;color:var(--accent);
   display:flex;align-items:center;justify-content:space-between}
+#appTitle .brand{display:flex;align-items:baseline;gap:7px}
+#verTag{font:400 10px var(--mono);letter-spacing:.04em;color:var(--dim);font-style:normal}
 #refreshBtn,#quitBtn{font-size:15px;line-height:1;padding:3px 8px;
   border:1px solid var(--line);border-radius:6px;color:var(--dim)}
 #refreshBtn:hover{color:var(--accent);border-color:var(--accent-dim)}
@@ -48,8 +50,10 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 #rootPath:focus{outline:none;border-color:var(--accent-dim)}
 #rootSet,#rootBrowse{padding:0 12px;border:1px solid var(--line);border-radius:6px;color:var(--text)}
 #rootSet:hover,#rootBrowse:hover{border-color:var(--accent-dim)}
-#rootStatus{font:10.5px var(--mono);color:var(--dim);padding:0 14px 2px;
+/* only used for errors now — the active root shows in the input placeholder */
+#rootStatus{font:10.5px var(--mono);color:#e0a97a;padding:2px 14px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#rootStatus:empty{display:none}
 #fileFilter{margin:8px 12px 12px;padding:8px 10px;background:var(--bg);
   border:1px solid var(--line);border-radius:6px;color:var(--text);width:calc(100% - 24px)}
 #fileFilter:focus{outline:none;border-color:var(--accent-dim)}
@@ -208,7 +212,7 @@ mark.focusMatch{outline:2px solid var(--text)}
 <body>
 
 <aside id="sidebar">
-  <div id="appTitle"><span>TRANSCRIBINATOR</span>
+  <div id="appTitle"><span class="brand">TRANSCRIBINATOR<i id="verTag"></i></span>
     <span style="display:flex;gap:6px">
       <button id="refreshBtn" title="Reload everything from disk">&#10227;</button>
       <button id="quitBtn" title="Stop the server and close the app">&#9211;</button>
@@ -322,8 +326,9 @@ const encPath=p=>p.split('/').map(encodeURIComponent).join('/');
 async function loadMediaRoot(){
   try{
     const d=await (await fetch('/api/mediaRoot')).json();
-    $('rootStatus').textContent=d.path+(d.exists?'':'  (missing!)');
+    $('rootStatus').textContent=d.exists?'':'folder not found: '+d.path;
     $('rootPath').placeholder=d.path;
+    $('rootPath').title=d.path;
     $('recurseChk').checked=!!d.recursive;
     $('gpuChk').checked=!!d.useGpu;
   }catch(e){}
@@ -1001,9 +1006,15 @@ window.addEventListener('resize',()=>{
 /* ---------------- annotations ---------------- */
 let annotations=[];        // {time, text, user?} — persisted inside the transcript json
 let currentUser='';
-const EXPECTED_SERVER='1.15.0';
+const EXPECTED_SERVER='1.15.1';
+function setVersionLabel(v){
+  $('verTag').textContent='v'+v;
+  document.title='Transcribinator '+v;
+}
+setVersionLabel(EXPECTED_SERVER);   // replaced by the server's own version below
 fetch('/api/whoami').then(r=>r.json()).then(d=>{
   currentUser=d.user||'';
+  if(d.version)setVersionLabel(d.version);
   if(d.version!==EXPECTED_SERVER)showVerWarn(d.version||'pre-1.3');
 }).catch(()=>showVerWarn('unreachable'));
 function showVerWarn(got){

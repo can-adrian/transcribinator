@@ -121,7 +121,7 @@ MEDIA_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".mp3", ".wav", ".m4a", "
 MODEL_SIZE = os.environ.get("WHISPER_MODEL", "medium")
 ARGOS_DIR = _env("ARGOS_DIR")
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
-APP_VERSION = "1.15.0"
+APP_VERSION = "1.15.1"
 
 app = FastAPI(title=APP_NAME)
 

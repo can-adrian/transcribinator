@@ -12,7 +12,7 @@ the next free one is used. Stop it with the ⏻ button in the app, or by closing
 the console.
 
 The startup line reports the version and active media root, e.g.
-`Transcribinator v1.15.0 — model=medium  media=D:\shows\...`.
+`Transcribinator v1.15.1 — model=medium  media=D:\shows\...`.
 
 ## Setup
 
