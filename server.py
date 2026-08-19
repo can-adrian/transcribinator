@@ -121,7 +121,7 @@ MEDIA_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".mp3", ".wav", ".m4a", "
 MODEL_SIZE = os.environ.get("WHISPER_MODEL", "medium")
 ARGOS_DIR = _env("ARGOS_DIR")
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
-APP_VERSION = "1.14.0"
+APP_VERSION = "1.15.0"
 
 app = FastAPI(title=APP_NAME)
 
@@ -259,14 +259,22 @@ def _safeUnder(root, path):
 
 # ---------------------------------------------------------------- transcription
 _model = None
+_modelDevice = None
 _modelLock = threading.Lock()
 _status = {}          # stem -> queued | running:<pct> | error:<msg>
 _jobQueue = queue.Queue()
 
 
+def _useGpu():
+    return bool(_readCfg().get("useGpu", False))
+
+
 def _getModel():
-    global _model
+    global _model, _modelDevice
     with _modelLock:
+        device = "cuda" if _useGpu() else "cpu"
+        if _model is not None and _modelDevice != device:
+            _model = None                 # setting changed — reload on this device
         if _model is None:
             try:
                 from faster_whisper import WhisperModel
@@ -276,9 +284,16 @@ def _getModel():
                     "check that the package is part of your resolved "
                     f"context. ({exc})") from exc
             try:
-                _model = WhisperModel(MODEL_SIZE, device="auto",
+                print(f"[model] loading '{MODEL_SIZE}' on {device}", flush=True)
+                _model = WhisperModel(MODEL_SIZE, device=device,
                                       compute_type="auto")
+                _modelDevice = device
             except Exception as exc:  # noqa: BLE001
+                if device == "cuda":
+                    raise RuntimeError(
+                        f"could not load speech model '{MODEL_SIZE}' on the GPU. "
+                        f"Turn off 'Use GPU' in the sidebar to run on CPU. "
+                        f"({exc})") from exc
                 raise RuntimeError(
                     f"could not load speech model '{MODEL_SIZE}'. On a machine "
                     f"without internet the model must already be staged: set "
@@ -640,9 +655,10 @@ def convertStatus(stem: str):
 # ------------------------------------------------------------------------- api
 @app.get("/api/mediaRoot")
 def getMediaRoot():
+    """Media root plus the other app-wide settings the sidebar shows."""
     root = _mediaRoot()
     return {"path": str(root.resolve()), "exists": root.is_dir(),
-            "recursive": _recursive()}
+            "recursive": _recursive(), "useGpu": _useGpu()}
 
 
 @app.post("/api/mediaRoot")
@@ -657,6 +673,8 @@ async def setMediaRoot(request: Request):
         updates["mediaRoot"] = str(root)
     if "recursive" in body:
         updates["recursive"] = bool(body["recursive"])
+    if "useGpu" in body:
+        updates["useGpu"] = bool(body["useGpu"])
     if not updates:
         raise HTTPException(400, "nothing to update")
     _writeCfg(**updates)
@@ -1057,7 +1075,8 @@ def _serve(portOverride=None, root=None):
     if _indexPath() is None:
         print(f"WARNING: index.html not found in {ROOT / 'static'} or {ROOT} — "
               "the page will not load until it is in one of those.", flush=True)
-    print(f"{APP_NAME} v{APP_VERSION} — model={MODEL_SIZE}  "
+    print(f"{APP_NAME} v{APP_VERSION} — model={MODEL_SIZE} "
+          f"({'gpu' if _useGpu() else 'cpu'})  "
           f"media={_mediaRoot()}\n  config={CONFIG_DIR}  {url}\n"
           "  Close this window, or use Quit in the app, to stop the server.",
           flush=True)

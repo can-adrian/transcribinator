@@ -12,7 +12,7 @@ the next free one is used. Stop it with the ⏻ button in the app, or by closing
 the console.
 
 The startup line reports the version and active media root, e.g.
-`Transcribinator v1.14.0 — model=medium  media=D:\shows\...`.
+`Transcribinator v1.15.0 — model=medium  media=D:\shows\...`.
 
 ## Setup
 
@@ -88,6 +88,11 @@ Without rez, the same commands are `python server.py transcribe ...`.
 media (`.mp4 .mov .mkv .webm .m4v .mp3 .wav .m4a .flac`). "Include subfolders"
 toggles recursion. Browse via the `…` button (native OS dialog) or type a path
 and press Enter. The choice persists across restarts.
+
+**Use GPU** (sidebar checkbox, off by default): transcribe on the GPU rather
+than the CPU. Requires a working CUDA setup for ctranslate2; if the model
+fails to load on the GPU the error says so and suggests turning it off. The
+setting applies to the next transcription — no restart needed.
 
 **Transcribe**: click the badge next to a recording. Progress shows as a
 percentage and a bar; the console logs `[transcribe]` lines. Transcripts are

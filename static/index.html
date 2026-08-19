@@ -39,6 +39,9 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 #recurseRow{display:flex;gap:7px;align-items:center;margin:6px 14px 0;
   font-size:12px;color:var(--dim);cursor:pointer;user-select:none}
 #recurseRow input{accent-color:var(--accent)}
+#gpuRow{display:flex;gap:7px;align-items:center;margin:4px 14px 0;
+  font-size:12px;color:var(--dim);cursor:pointer;user-select:none}
+#gpuRow input{accent-color:var(--accent)}
 #rootBar{display:flex;gap:6px;margin:12px 12px 4px}
 #rootPath{flex:1;padding:8px 10px;background:var(--bg);min-width:0;
   border:1px solid var(--line);border-radius:6px;color:var(--text);font:12px var(--mono)}
@@ -216,6 +219,7 @@ mark.focusMatch{outline:2px solid var(--text)}
     <button id="rootBrowse" title="Browse for folder">…</button>
   </div>
   <label id="recurseRow"><input type="checkbox" id="recurseChk" checked> Include subfolders</label>
+  <label id="gpuRow"><input type="checkbox" id="gpuChk"> Use GPU for transcription</label>
   <div id="rootStatus"></div>
   <input id="fileFilter" placeholder="Filter recordings by name…" spellcheck="false">
   <div id="sideScroll">
@@ -321,6 +325,7 @@ async function loadMediaRoot(){
     $('rootStatus').textContent=d.path+(d.exists?'':'  (missing!)');
     $('rootPath').placeholder=d.path;
     $('recurseChk').checked=!!d.recursive;
+    $('gpuChk').checked=!!d.useGpu;
   }catch(e){}
 }
 // open a native OS dialog via the server; returns path or '' (cancelled/failed)
@@ -359,6 +364,13 @@ $('rootBrowse').onclick=async()=>{
   if(path)updateMediaRoot({path});
 };
 $('recurseChk').onchange=e=>updateMediaRoot({recursive:e.target.checked});
+// GPU choice only affects the next transcription; no need to reset the listing
+$('gpuChk').onchange=async e=>{
+  await fetch('/api/mediaRoot',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({useGpu:e.target.checked})});
+  loadMediaRoot();
+};
 
 /* ---------------- full refresh ---------------- */
 async function refreshAll(){
@@ -989,7 +1001,7 @@ window.addEventListener('resize',()=>{
 /* ---------------- annotations ---------------- */
 let annotations=[];        // {time, text, user?} — persisted inside the transcript json
 let currentUser='';
-const EXPECTED_SERVER='1.14.0';
+const EXPECTED_SERVER='1.15.0';
 fetch('/api/whoami').then(r=>r.json()).then(d=>{
   currentUser=d.user||'';
   if(d.version!==EXPECTED_SERVER)showVerWarn(d.version||'pre-1.3');
