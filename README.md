@@ -48,6 +48,25 @@ everything except subtitle translation works normally.
 
 Both can be set studio-wide in `post_commands()` in `package.py`.
 
+## Launcher script
+
+`transcribinator.sh` wraps the rez context, the model paths and the server
+call into one command:
+
+    ./transcribinator.sh                          # web app, last used root
+    ./transcribinator.sh /shows/hnd/calls         # web app, opening that folder
+    ./transcribinator.sh transcribe /shows/hnd/calls -r --translate sv
+
+Everything after the script name is passed straight to `server.py`. The site
+settings live in a block at the top of the script — the rez request, the
+`WHISPER_MODEL` folder and the `TRANSCRIBINATOR_ARGOS_DIR` pack folder — and
+each can be overridden from the environment for a one-off:
+
+    WHISPER_MODEL=/tmp/faster-whisper-small ./transcribinator.sh
+
+It warns (without stopping) if the model or pack folders are missing, so a
+misconfigured path is obvious immediately rather than at first transcription.
+
 ## Command line
 
 With no arguments the app starts the web UI. It can also run headless, which

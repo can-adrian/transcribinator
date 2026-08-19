@@ -19,7 +19,7 @@ from pathlib import Path
 
 # index.html may live in static/ or beside server.py; both layouts work
 PAYLOAD = ["server.py", "static", "index.html", "README.md",
-           "requirements.txt"]
+           "requirements.txt", "transcribinator.sh"]
 
 SOURCE = Path(os.environ.get("REZ_BUILD_SOURCE_PATH", Path(__file__).parent))
 BUILD = Path(os.environ.get("REZ_BUILD_PATH", SOURCE / "build"))
