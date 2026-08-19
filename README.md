@@ -12,7 +12,7 @@ the next free one is used. Stop it with the ⏻ button in the app, or by closing
 the console.
 
 The startup line reports the version and active media root, e.g.
-`Transcribinator v1.13.0 — model=medium  media=D:\shows\...`.
+`Transcribinator v1.14.0 — model=medium  media=D:\shows\...`.
 
 ## Setup
 
@@ -68,6 +68,17 @@ outputs are skipped unless `--force` is given, which makes re-running over a
 folder cheap. Each step (transcribe / convert / translate) reports separately
 and one failing does not stop the others; the exit code is non-zero if
 anything failed.
+
+The app can also be opened straight onto a folder:
+
+    transcribinator /shows/hnd/calls
+
+which sets that as the media root before the UI opens. `serve` is implied;
+`transcribinator serve FOLDER --port 8790` is the explicit form.
+
+Job failures (transcribe, convert, translate) are printed to the terminal with
+a traceback as well as shown in the UI, so a console left open doubles as the
+log.
 
 Without rez, the same commands are `python server.py transcribe ...`.
 

@@ -35,6 +35,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import traceback
 from pathlib import Path, PurePosixPath
 
 import imageio_ffmpeg
@@ -97,6 +98,12 @@ for _old, _new in ((ROOT / "syn_config.json", CONFIG_PATH),
             pass
 
 
+def _logError(label, exc):
+    """Report a job failure in the terminal as well as in the UI."""
+    print(f"[error] {label}: {exc}", flush=True)
+    traceback.print_exc()
+
+
 def _defaultMedia():
     env = _env("MEDIA", ("CALL_MEDIA",))
     if env:
@@ -114,7 +121,7 @@ MEDIA_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".mp3", ".wav", ".m4a", "
 MODEL_SIZE = os.environ.get("WHISPER_MODEL", "medium")
 ARGOS_DIR = _env("ARGOS_DIR")
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
-APP_VERSION = "1.13.0"
+APP_VERSION = "1.14.0"
 
 app = FastAPI(title=APP_NAME)
 
@@ -290,10 +297,16 @@ def _runTranscription(src, dst, label, onProgress=None):
     try:
         # pre-extract clean mono 16k wav — sidesteps container/codec issues
         # that make whisper's internal decoder stop after a few seconds
-        subprocess.run(
+        proc = subprocess.run(
             [FFMPEG, "-y", "-i", str(src), "-vn",
              "-ac", "1", "-ar", "16000", "-map", "0:a:0", str(tmpWav)],
-            check=True, capture_output=True)
+            capture_output=True, text=True, errors="replace")
+        if proc.returncode != 0:
+            tail = [l for l in (proc.stderr or "").strip().splitlines() if l.strip()]
+            raise RuntimeError(
+                "audio extraction failed: "
+                + (tail[-1] if tail else f"ffmpeg exit {proc.returncode}")
+                + f"  [{src}]")
 
         model = _getModel()
         print(f"[transcribe] {label}: starting", flush=True)
@@ -352,6 +365,7 @@ def _transcribe(relPath):
             onProgress=lambda pct: _status.__setitem__(stem, f"running:{pct}"))
         _status.pop(stem, None)
     except Exception as exc:  # noqa: BLE001
+        _logError(f"transcribe {relPath}", exc)
         _status[stem] = f"error:{exc}"
 
 
@@ -452,10 +466,12 @@ def _translateJob(stem, lang):
             _transcriptPath(stem), lang, stem,
             onProgress=lambda pct: _transStatus.__setitem__(key, f"running:{pct}"))
         _transStatus.pop(key, None)
-    except ModuleNotFoundError:
+    except ModuleNotFoundError as exc:
+        _logError(f"translate {stem} -> {lang}", exc)
         _transStatus[key] = ("error:argostranslate is not available in this "
                              "environment — subtitle translation is disabled")
     except Exception as exc:  # noqa: BLE001
+        _logError(f"translate {stem} -> {lang}", exc)
         _transStatus[key] = f"error:{exc}"
 
 
@@ -583,6 +599,7 @@ def _convertJob(relPath):
             onProgress=lambda pct: _convStatus.__setitem__(stem, f"running:{pct}"))
         _convStatus.pop(stem, None)
     except Exception as exc:  # noqa: BLE001
+        _logError(f"convert {relPath}", exc)
         _convStatus[stem] = f"error:{exc}"
 
 
@@ -1001,12 +1018,22 @@ def _buildParser():
                         f"({', '.join(SUB_LANGS)})")
 
     s = sub.add_parser("serve", help="start the web app (the default)")
+    s.add_argument("root", nargs="?", metavar="FOLDER", default=None,
+                   help="media root folder to open with")
     s.add_argument("--port", type=int, default=None, help="override the port")
     return p
 
 
-def _serve(portOverride=None):
+def _serve(portOverride=None, root=None):
     import sys
+
+    if root:
+        folder = Path(root).expanduser()
+        if not folder.is_dir():
+            print(f"ERROR: not a folder: {folder}", flush=True)
+            return 1
+        _writeCfg(mediaRoot=str(folder))
+        print(f"media root set to {folder}", flush=True)
 
     port = portOverride or PORT
     if not _portFree(port):
@@ -1042,7 +1069,12 @@ def _serve(portOverride=None):
 if __name__ == "__main__":
     import sys
 
-    parsed = _buildParser().parse_args()
+    # allow "transcribinator /some/folder" as shorthand for "serve /some/folder"
+    argv = sys.argv[1:]
+    if argv and argv[0] not in ("serve", "transcribe") and not argv[0].startswith("-"):
+        argv.insert(0, "serve")
+
+    parsed = _buildParser().parse_args(argv)
     if parsed.command == "transcribe":
         sys.exit(_cliTranscribe(parsed))
-    sys.exit(_serve(getattr(parsed, "port", None)))
+    sys.exit(_serve(getattr(parsed, "port", None), getattr(parsed, "root", None)))
