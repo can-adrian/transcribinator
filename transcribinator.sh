@@ -17,7 +17,7 @@ set -euo pipefail
 # --- site settings -----------------------------------------------------------
 # Packages to resolve. Pinned to python-3.11 because the converted packages
 # carry hard python==3.11.7 requirements.
-REZ_REQUEST="${TRANSCRIBINATOR_REZ_REQUEST:-python-3.11 fastapi uvicorn faster_whisper imageio_ffmpeg argostranslate}"
+REZ_REQUEST="${TRANSCRIBINATOR_REZ_REQUEST:-python-3.11 fastapi uvicorn faster_whisper imageio_ffmpeg argostranslate torch-2.7.1-cpu}"
 
 # Speech model: a folder holding model.bin, config.json, tokenizer.json, vocabulary.txt
 WHISPER_MODEL="${WHISPER_MODEL:-/ice/shared/adts/neural_networks}"

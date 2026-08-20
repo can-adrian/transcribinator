@@ -55,7 +55,7 @@ Confirm it registered:
 The browser opens automatically at http://127.0.0.1:8765 and the terminal
 shows something like:
 
-    Transcribinator v1.18.0 — model=/ice/shared/adts/neural_networks (cpu)
+    Transcribinator v1.18.1 — model=/ice/shared/adts/neural_networks (cpu)
       media=/ice/shared/adts/2026_vacay_handovers
       config=/users/<you>/.config/transcribinator  http://127.0.0.1:8765
 
@@ -120,11 +120,13 @@ TROUBLESHOOTING
         done
     Whatever says "no" needs rebuilding for python-3.11.7 by the dev team.
 
-"ImportError: libcudart.so.13 / libcufile.so.0 / libnccl.so.2"
-    torch is a CUDA build and the nvidia_* packages ship their .so files
-    without adding their lib dirs to LD_LIBRARY_PATH. Report it to the dev
-    team; a CPU-only torch build would remove the whole chain. Nothing in
-    Transcribinator needs a GPU.
+"ImportError: libcudart.so / libcufile.so / libnccl.so / libcupti.so"
+    torch resolved to a CUDA build. The nvidia_* packages ship their .so files
+    without adding their lib dirs to LD_LIBRARY_PATH, so the import fails one
+    library at a time. The fix is the CPU torch build, pinned in package.py as
+    "torch-2.7.1-cpu" — note that "torch-2.7.1" alone resolves to the cu128
+    variant. Nothing here needs a GPU: ctranslate2 does not use torch for
+    inference, and argostranslate's use of it via stanza is light CPU work.
 
 "could not load speech model ..."
     WHISPER_MODEL must point at a folder containing model.bin, config.json,

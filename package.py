@@ -1,6 +1,6 @@
 name = "transcribinator"
 
-version = "1.18.0"       # keep in sync with APP_VERSION in server.py
+version = "1.18.1"       # keep in sync with APP_VERSION in server.py
                         # (build.py fails the build if these drift)
 
 description = "Transcribinator — offline transcription, search, annotation " \
@@ -24,11 +24,12 @@ requires = [
     # packages are troublesome.
     "argostranslate",
 
-    # argostranslate pulls in torch via stanza, and our torch is a CUDA build.
-    # The nvidia_* packages ship their .so files but do not add their lib dirs
-    # to LD_LIBRARY_PATH, so torch fails to import without help. Remove this
-    # once those packages are fixed, or once a CPU-only torch is available.
-    "nvidia_cufile",
+    # argostranslate imports stanza, which imports torch — even though nothing
+    # here uses a GPU. The CUDA torch builds fail to import unless every
+    # nvidia_* lib dir is on LD_LIBRARY_PATH, so pin the CPU build explicitly.
+    # Note "torch-2.7.1" alone resolves to the cu128 variant; the -cpu suffix
+    # is required.
+    "torch-2.7.1-cpu",
 ]
 
 tools = ["transcribinator"]

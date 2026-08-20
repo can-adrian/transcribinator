@@ -147,7 +147,7 @@ os.environ.setdefault("ARGOS_CHUNK_TYPE", "MINISBD")
 # working CUDA stack. Set TRANSCRIBINATOR_ALLOW_GPU=1 to expose the checkbox.
 GPU_ALLOWED = bool(_env("ALLOW_GPU"))
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
-APP_VERSION = "1.18.0"
+APP_VERSION = "1.18.1"
 
 app = FastAPI(title=APP_NAME)
 
@@ -746,7 +746,8 @@ async def setMediaRoot(request: Request):
         root = Path(raw).expanduser()
         if not root.is_dir():
             raise HTTPException(404, f"not a folder: {root}")
-        updates["mediaRoot"] = str(root)
+        # absolute, so the root does not shift with the working directory
+        updates["mediaRoot"] = str(root.resolve())
     if "recursive" in body:
         updates["recursive"] = bool(body["recursive"])
     if "useGpu" in body:
@@ -1235,6 +1236,7 @@ def _serve(portOverride=None, root=None, force=False):
         if not folder.is_dir():
             print(f"ERROR: not a folder: {folder}", flush=True)
             return 1
+        folder = folder.resolve()
         _writeCfg(mediaRoot=str(folder))
         print(f"media root set to {folder}", flush=True)
 
