@@ -131,7 +131,7 @@ ARGOS_DIR = _env("ARGOS_DIR")
 # working CUDA stack. Set TRANSCRIBINATOR_ALLOW_GPU=1 to expose the checkbox.
 GPU_ALLOWED = bool(_env("ALLOW_GPU"))
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
-APP_VERSION = "1.17.2"
+APP_VERSION = "1.17.3"
 
 app = FastAPI(title=APP_NAME)
 

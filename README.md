@@ -14,7 +14,7 @@ some other program, the next free one is used. Stop it with the the app's ⏻
 button, or by closing the console.
 
 The startup line reports the version and active media root, e.g.
-`Transcribinator v1.17.2 — model=medium  media=D:\shows\...`.
+`Transcribinator v1.17.3 — model=medium  media=D:\shows\...`.
 
 ## Setup
 

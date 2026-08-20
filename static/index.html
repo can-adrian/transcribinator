@@ -479,7 +479,8 @@ function callMatches(data){
   if(!terms.length)return out;
   for(const seg of data.segments){
     for(const h of findHits(segText(seg))){
-      out.push({t:timeAtOffset(seg,h.s),ti:h.ti});
+      out.push({t:timeAtOffset(seg,h.s),ti:h.ti,
+                term:terms[h.ti].text,matched:segText(seg).slice(h.s,h.e)});
       if(out.length>=400)return out;
     }
   }
@@ -495,6 +496,7 @@ function paintMini(stem){
     const i=document.createElement('i');
     i.style.left=(m.t/data.duration*100)+'%';
     i.style.background=TERM_COLORS[m.ti%TERM_COLORS.length];
+    i.title=fmtTc(m.t)+' \u2014 '+matchLabel(m.term,m.matched);
     entry.mini.appendChild(i);
   }
 }
@@ -703,7 +705,8 @@ function renderTranscript(){
       let i=0,out='';
       for(const h of hits){
         const color=terms[h.ti].color;
-        matches.push({time:timeAtOffset(seg,h.s),el:div,color});
+        matches.push({time:timeAtOffset(seg,h.s),el:div,color,
+                      term:terms[h.ti].text,matched:raw.slice(h.s,h.e)});
         out+=esc(raw.slice(i,h.s))
           +`<mark data-m="${matches.length-1}" style="background:${color}">`
           +esc(raw.slice(h.s,h.e))+'</mark>';
@@ -731,6 +734,12 @@ function timeAtOffset(seg,off){
   return seg.start;
 }
 
+// "explosion", or "1140 (matched \u201celeven forty\u201d)" when a variant hit
+function matchLabel(term,matched){
+  return matched && matched.toLowerCase()!==term.toLowerCase()
+    ? `${term} (matched \u201c${matched}\u201d)` : term;
+}
+
 /* ---------------- marker strip ---------------- */
 function drawTicks(){
   strip.querySelectorAll('.tick').forEach(t=>t.remove());
@@ -741,7 +750,7 @@ function drawTicks(){
     t.className='tick';
     t.style.left=(m.time/dur*100)+'%';
     t.style.background=m.color;
-    t.title=fmtTc(m.time);
+    t.title=fmtTc(m.time)+' \u2014 '+matchLabel(m.term,m.matched);
     t.onclick=e=>{e.stopPropagation();gotoMatch(i);};
     strip.appendChild(t);
   });
@@ -1024,7 +1033,7 @@ window.addEventListener('resize',()=>{
 /* ---------------- annotations ---------------- */
 let annotations=[];        // {time, text, user?} — persisted inside the transcript json
 let currentUser='';
-const EXPECTED_SERVER='1.17.2';
+const EXPECTED_SERVER='1.17.3';
 function setVersionLabel(v){
   $('verTag').textContent='v'+v;
   document.title='Transcribinator '+v;
