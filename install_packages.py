@@ -1,17 +1,21 @@
 #!/usr/bin/env python
-"""Copy the locally-built rez packages Transcribinator needs to another user.
+"""Set a user up to run Transcribinator: rez packages and a shell alias.
 
 Most of the dependency packages currently live in one person's local package
 path. To let someone else test the tool, those packages have to be copied into
-their local path too.
+their local path too. Rather than hardcoding a list (which drifts), this
+resolves the context and copies exactly the packages that resolved out of the
+source user's area.
 
-Rather than hardcoding a list (which drifts), this resolves the context and
-copies exactly the packages that resolved out of the source user's area.
+    python install_packages.py --user jsmith --dry-run   # show what would copy
+    python install_packages.py --user jsmith             # copy the packages
+    python install_packages.py --alias                   # add my own alias
+    python install_packages.py --user jsmith --alias     # both
 
-    python install_packages.py --user jsmith --dry-run
-    python install_packages.py --user jsmith
-
-Nothing is deleted at the destination: rsync only adds and updates.
+Nothing is deleted at the destination: rsync only adds and updates. The alias
+is added to the *current* user's shell rc file, since another user's home
+directory is normally not writable — for them, the printed line is what they
+add themselves.
 """
 import argparse
 import json
@@ -19,6 +23,12 @@ import os
 import shutil
 import subprocess
 import sys
+
+ALIAS_NAME = "transcribinator"
+ALIAS_MARKER = "# added by transcribinator install_packages.py"
+# A rez alias only exists inside a resolved context, so the shell alias wraps
+# the whole resolve. --alias-target script points at the dev launcher instead.
+ALIAS_REZ = f"rez-env {ALIAS_NAME} -- {ALIAS_NAME}"
 
 DEFAULT_REQUEST = ("python-3.11 fastapi uvicorn faster_whisper "
                    "imageio_ffmpeg argostranslate")
@@ -76,11 +86,66 @@ def human(n):
         n /= 1024
 
 
+def launcherPath():
+    """The dev launcher next to this script, as an absolute path."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "transcribinator.sh")
+
+
+def aliasCommand(target):
+    """What the alias should run: the released rez package, or the launcher."""
+    return ALIAS_REZ if target == "rez" else launcherPath()
+
+
+def ensureAlias(rcPath, command, apply=True):
+    """Add or update the alias line in a shell rc file. Returns a status word."""
+    line = f"alias {ALIAS_NAME}='{command}'  {ALIAS_MARKER}"
+    existing = []
+    if os.path.isfile(rcPath):
+        with open(rcPath, encoding="utf-8", errors="replace") as fh:
+            existing = fh.read().splitlines()
+
+    hits = [i for i, l in enumerate(existing) if ALIAS_MARKER in l
+            or l.strip().startswith(f"alias {ALIAS_NAME}=")]
+    if hits and existing[hits[0]].strip() == line:
+        return "already set"
+    if not apply:
+        return "would update" if hits else "would add"
+
+    if existing:                                  # keep a backup before editing
+        try:
+            with open(rcPath + ".bak", "w", encoding="utf-8") as fh:
+                fh.write("\n".join(existing) + "\n")
+        except OSError:
+            pass
+
+    if hits:
+        for i in reversed(hits[1:]):              # drop any duplicates
+            del existing[i]
+        existing[hits[0]] = line
+        status = "updated"
+    else:
+        if existing and existing[-1].strip():
+            existing.append("")
+        existing.append(line)
+        status = "added"
+    with open(rcPath, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(existing) + "\n")
+    return status
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--user", required=True,
-                    help="username to copy the packages to")
+    ap.add_argument("--user", default=None,
+                    help="username to copy the rez packages to")
+    ap.add_argument("--alias", action="store_true",
+                    help=f"add a '{ALIAS_NAME}' alias to your own shell rc file")
+    ap.add_argument("--alias-target", choices=("rez", "script"), default="rez",
+                    help="what the alias runs: the released rez package "
+                         "(default) or the local transcribinator.sh")
+    ap.add_argument("--rc", default=None,
+                    help="shell rc file to edit (default: ~/.bashrc)")
     ap.add_argument("--request", default=DEFAULT_REQUEST,
                     help="rez request to resolve (default: %(default)s)")
     ap.add_argument("--source", default=DEFAULT_SOURCE,
@@ -93,6 +158,22 @@ def main():
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the confirmation prompt")
     args = ap.parse_args()
+    if not args.user and not args.alias:
+        ap.error("give --user (to copy packages), --alias, or both")
+
+    script = launcherPath()
+    if args.alias:
+        rc = os.path.expanduser(args.rc or "~/.bashrc")
+        command = aliasCommand(args.alias_target)
+        if args.alias_target == "script" and not os.path.isfile(script):
+            print(f"WARNING: launcher not found at {script}", flush=True)
+        status = ensureAlias(rc, command, apply=not args.dry_run)
+        print(f"alias '{ALIAS_NAME}' -> {command}\n  {rc}: {status}")
+        if status in ("added", "updated"):
+            print(f"  run 'source {rc}' or open a new shell to pick it up")
+        if not args.user:
+            return 0
+        print()
 
     if not shutil.which("rsync"):
         sys.exit("rsync not found on PATH — it is needed to copy the packages")
@@ -145,9 +226,15 @@ def main():
         print("dry run complete — rerun without --dry-run to copy")
         return 0
     print(f"copied {len(names)} package(s) to {dest}")
-    print("\nHave the user verify with:")
-    print(f"    rez-env {args.request} -- python -c \"import fastapi, uvicorn, "
-          f"faster_whisper, imageio_ffmpeg; print('resolve OK')\"")
+    print(f"\n{args.user} still needs the app itself. Have them:")
+    print(f"  1. check the resolve:")
+    print(f"       rez-env {args.request} -- python -c \"import fastapi, "
+          f"uvicorn, faster_whisper, imageio_ffmpeg; print('resolve OK')\"")
+    print(f"  2. make sure they can read the launcher:")
+    print(f"       {script}")
+    print(f"  3. add the alias in their own shell:")
+    print(f"       python {os.path.abspath(__file__)} --alias")
+    print(f"     (which sets: alias {ALIAS_NAME}='{ALIAS_REZ}')")
     return 0
 
 

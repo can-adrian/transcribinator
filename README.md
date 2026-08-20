@@ -14,7 +14,7 @@ some other program, the next free one is used. Stop it with the the app's ⏻
 button, or by closing the console.
 
 The startup line reports the version and active media root, e.g.
-`Transcribinator v1.17.0 — model=medium  media=D:\shows\...`.
+`Transcribinator v1.17.2 — model=medium  media=D:\shows\...`.
 
 ## Setup
 
@@ -165,6 +165,36 @@ less room; double-click it to reset. The height is remembered per browser.
 
 **Refresh (⟳)** next to the title: re-reads everything from disk — useful after
 hand-editing any JSON.
+
+## Giving another user the packages
+
+While the dependency packages live in one person's local rez path, another
+user cannot resolve the tool until those packages exist in theirs.
+`install_packages.py` resolves the context, works out which packages came from
+the source user's area, and rsyncs exactly those:
+
+    python install_packages.py --user jsmith --dry-run    # show what would copy
+    python install_packages.py --user jsmith
+
+It never deletes anything at the destination, skips packages that are already
+in a shared location, and prints what the other user still needs to do. Once
+the dependencies are properly released this script stops being necessary.
+
+Note that copying the dependencies does **not** give someone the app itself —
+release Transcribinator as a rez package for that (see below), and they run:
+
+    rez-env transcribinator -- transcribinator
+
+A rez alias only exists inside a resolved context, so it is not available in a
+plain shell. Each user can add a shell alias that wraps the whole resolve:
+
+    python install_packages.py --alias        # adds to ~/.bashrc
+
+which sets `alias transcribinator='rez-env transcribinator -- transcribinator'`.
+It is safe to re-run: an existing alias is updated rather than duplicated, and
+the rc file is backed up to `.bashrc.bak` first. Use `--rc` for a different
+shell file, `--dry-run` to preview, and `--alias-target script` to point at the
+local `transcribinator.sh` instead (useful while developing).
 
 ## Deploying as a rez package
 
