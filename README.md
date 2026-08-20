@@ -12,7 +12,7 @@ the next free one is used. Stop it with the ⏻ button in the app, or by closing
 the console.
 
 The startup line reports the version and active media root, e.g.
-`Transcribinator v1.15.1 — model=medium  media=D:\shows\...`.
+`Transcribinator v1.16.2 — model=medium  media=D:\shows\...`.
 
 ## Setup
 
@@ -97,7 +97,11 @@ which sets that as the media root before the UI opens. `serve` is implied;
 
 Job failures (transcribe, convert, translate) are printed to the terminal with
 a traceback as well as shown in the UI, so a console left open doubles as the
-log.
+log. Completed jobs report their timing as `HH:MM:SS`, and transcription also
+reports how much faster than realtime it ran — useful for estimating how long
+a batch will take:
+
+    [transcribe] call.mov: done — 00:52:14 of audio in 00:11:38, 4.5x realtime, 812 segments
 
 Without rez, the same commands are `python server.py transcribe ...`.
 
@@ -108,10 +112,11 @@ media (`.mp4 .mov .mkv .webm .m4v .mp3 .wav .m4a .flac`). "Include subfolders"
 toggles recursion. Browse via the `…` button (native OS dialog) or type a path
 and press Enter. The choice persists across restarts.
 
-**Use GPU** (sidebar checkbox, off by default): transcribe on the GPU rather
-than the CPU. Requires a working CUDA setup for ctranslate2; if the model
-fails to load on the GPU the error says so and suggests turning it off. The
-setting applies to the next transcription — no restart needed.
+**Use GPU** (sidebar checkbox): transcribe on the GPU rather than the CPU.
+Locked off by default, since it needs a working CUDA stack; set
+`TRANSCRIBINATOR_ALLOW_GPU=1` to expose it. When enabled it applies to the
+next transcription with no restart, and if the model fails to load on the GPU
+the error says so and suggests turning it off.
 
 **Transcribe**: click the badge next to a recording. Progress shows as a
 percentage and a bar; the console logs `[transcribe]` lines. Transcripts are
@@ -152,6 +157,9 @@ can't play (ProRes, DNxHD, ...), a bar appears offering **Convert for
 playback** — ffmpeg writes an h264 copy named `<name>_converted.mp4` next to
 the source and plays that from then on. Transcription, search and annotations
 work on the original regardless, so converting is only needed to *watch* it.
+
+**Resizing**: drag the handle under the marker strip to give the video more or
+less room; double-click it to reset. The height is remembered per browser.
 
 **Refresh (⟳)** next to the title: re-reads everything from disk — useful after
 hand-editing any JSON.

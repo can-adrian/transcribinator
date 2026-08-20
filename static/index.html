@@ -44,6 +44,8 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 #gpuRow{display:flex;gap:7px;align-items:center;margin:4px 14px 0;
   font-size:12px;color:var(--dim);cursor:pointer;user-select:none}
 #gpuRow input{accent-color:var(--accent)}
+#gpuRow.locked{opacity:.45;cursor:not-allowed}
+#gpuRow.locked input{cursor:not-allowed}
 #rootBar{display:flex;gap:6px;margin:12px 12px 4px}
 #rootPath{flex:1;padding:8px 10px;background:var(--bg);min-width:0;
   border:1px solid var(--line);border-radius:6px;color:var(--text);font:12px var(--mono)}
@@ -80,7 +82,7 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 
 /* ---------- main ---------- */
 #main{display:flex;flex-direction:column;min-width:0;min-height:0;grid-row:1}
-#playerWrap{background:#000;flex:none;position:relative}
+#playerWrap{background:#000;flex:none;position:relative;height:46vh;min-height:120px}
 #subCtl{position:absolute;top:8px;right:8px;z-index:3;display:flex;gap:6px;align-items:center}
 #subSelect{background:rgba(20,22,27,.85);color:var(--text);border:1px solid var(--line);
   border-radius:6px;padding:4px 6px;font-size:12px}
@@ -98,7 +100,7 @@ video::cue{background:rgba(10,10,12,.75);color:#eceff4;font-size:1.05em}
 #convBar button{padding:5px 12px;border:1px solid #6a5330;border-radius:6px;
   color:#f0d6a8;background:rgba(0,0,0,.2)}
 #convBar button:hover{border-color:var(--accent);color:var(--accent)}
-video{display:block;width:100%;max-height:46vh;background:#000}
+video{display:block;width:100%;height:100%;object-fit:contain;background:#000}
 
 /* marker strip — search hits as edit-style ticks */
 #strip{position:relative;height:26px;background:var(--panel);
@@ -111,6 +113,15 @@ video{display:block;width:100%;max-height:46vh;background:#000}
   background:var(--text);pointer-events:none}
 #strip #progress{position:absolute;top:0;bottom:0;left:0;
   background:rgba(255,255,255,.045);pointer-events:none}
+
+/* drag handle between the player and the lower pane */
+#splitter{flex:none;height:7px;background:var(--panel);cursor:row-resize;
+  border-bottom:1px solid var(--line);position:relative}
+#splitter::after{content:'';position:absolute;left:50%;top:3px;
+  width:46px;height:2px;margin-left:-23px;border-radius:1px;background:var(--line)}
+#splitter:hover::after,#splitter.dragging::after{background:var(--accent)}
+body.resizing{cursor:row-resize;user-select:none}
+body.resizing #video{pointer-events:none}
 
 /* unified search frame — bottom of the whole UI */
 #searchBar{grid-column:1/3;grid-row:2;display:flex;gap:8px;align-items:center;
@@ -248,6 +259,7 @@ mark.focusMatch{outline:2px solid var(--text)}
   </div>
   <div id="convBar"></div>
   <div id="strip" title="Search matches"><div id="progress"></div><div id="playhead"></div></div>
+  <div id="splitter" title="Drag to resize · double-click to reset"></div>
   <div id="tabBar">
     <button class="tab active" data-tab="transcript">TRANSCRIPT</button>
     <button class="tab" data-tab="cloud">WORD CLOUD</button>
@@ -331,6 +343,12 @@ async function loadMediaRoot(){
     $('rootPath').title=d.path;
     $('recurseChk').checked=!!d.recursive;
     $('gpuChk').checked=!!d.useGpu;
+    $('gpuChk').disabled=!!d.gpuLocked;
+    $('gpuRow').classList.toggle('locked',!!d.gpuLocked);
+    $('gpuRow').title=d.gpuLocked
+      ?'Disabled in this environment — needs a working CUDA setup. '
+       +'Set TRANSCRIBINATOR_ALLOW_GPU=1 to enable.'
+      :'Transcribe on the GPU instead of the CPU';
   }catch(e){}
 }
 // open a native OS dialog via the server; returns path or '' (cancelled/failed)
@@ -1006,7 +1024,7 @@ window.addEventListener('resize',()=>{
 /* ---------------- annotations ---------------- */
 let annotations=[];        // {time, text, user?} — persisted inside the transcript json
 let currentUser='';
-const EXPECTED_SERVER='1.15.1';
+const EXPECTED_SERVER='1.16.2';
 function setVersionLabel(v){
   $('verTag').textContent='v'+v;
   document.title='Transcribinator '+v;
@@ -1117,6 +1135,42 @@ $('annoAddHere').onclick=()=>{
   const r=strip.getBoundingClientRect();
   showAnnoPop(r.left+(video.currentTime/(transcript.duration||1))*r.width,video.currentTime);
 };
+
+/* ---------------- resizable player ---------------- */
+const DEFAULT_PLAYER_H=Math.round(window.innerHeight*0.46);
+const splitter=$('splitter'), playerWrap=$('playerWrap');
+
+function setPlayerHeight(px,save){
+  const max=window.innerHeight-220;          // keep tabs + some transcript visible
+  const h=Math.max(120,Math.min(px,Math.max(160,max)));
+  playerWrap.style.height=h+'px';
+  if(save){try{localStorage.setItem('playerHeight',h);}catch(e){}}
+}
+try{
+  const saved=parseInt(localStorage.getItem('playerHeight'),10);
+  if(saved)setPlayerHeight(saved);
+}catch(e){}
+
+let resizing=false;
+splitter.addEventListener('mousedown',e=>{
+  resizing=true;
+  splitter.classList.add('dragging');
+  document.body.classList.add('resizing');
+  e.preventDefault();
+});
+document.addEventListener('mousemove',e=>{
+  if(!resizing)return;
+  const top=playerWrap.getBoundingClientRect().top;
+  setPlayerHeight(e.clientY-top-strip.offsetHeight-3);
+});
+document.addEventListener('mouseup',()=>{
+  if(!resizing)return;
+  resizing=false;
+  splitter.classList.remove('dragging');
+  document.body.classList.remove('resizing');
+  setPlayerHeight(playerWrap.getBoundingClientRect().height,true);
+});
+splitter.addEventListener('dblclick',()=>setPlayerHeight(DEFAULT_PLAYER_H,true));
 
 /* ---------------- playback / conversion ---------------- */
 let convPollToken=0;

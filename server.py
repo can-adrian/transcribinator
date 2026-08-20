@@ -19,6 +19,7 @@ Environment:
     TRANSCRIBINATOR_PORT       listen port      (default 8765)
     TRANSCRIBINATOR_NO_BROWSER set to skip auto-opening the browser
     TRANSCRIBINATOR_ARGOS_DIR  folder of staged .argosmodel translation packs
+    TRANSCRIBINATOR_ALLOW_GPU  set to expose the GPU option (needs CUDA)
 
 The pre-1.11 CALL_MEDIA / CALL_SEARCH_* names are still honoured as fallbacks.
 
@@ -98,6 +99,12 @@ for _old, _new in ((ROOT / "syn_config.json", CONFIG_PATH),
             pass
 
 
+def _hms(seconds):
+    """Seconds -> HH:MM:SS, for job timings in the terminal."""
+    s = max(0, int(round(seconds)))
+    return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
+
+
 def _logError(label, exc):
     """Report a job failure in the terminal as well as in the UI."""
     print(f"[error] {label}: {exc}", flush=True)
@@ -120,8 +127,11 @@ MEDIA_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".mp3", ".wav", ".m4a", "
 # a size name ("medium"), or a path to a locally staged converted model
 MODEL_SIZE = os.environ.get("WHISPER_MODEL", "medium")
 ARGOS_DIR = _env("ARGOS_DIR")
+# GPU transcription is locked off unless the site opts in, because it needs a
+# working CUDA stack. Set TRANSCRIBINATOR_ALLOW_GPU=1 to expose the checkbox.
+GPU_ALLOWED = bool(_env("ALLOW_GPU"))
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
-APP_VERSION = "1.15.1"
+APP_VERSION = "1.16.2"
 
 app = FastAPI(title=APP_NAME)
 
@@ -266,7 +276,7 @@ _jobQueue = queue.Queue()
 
 
 def _useGpu():
-    return bool(_readCfg().get("useGpu", False))
+    return GPU_ALLOWED and bool(_readCfg().get("useGpu", False))
 
 
 def _getModel():
@@ -361,8 +371,11 @@ def _runTranscription(src, dst, label, onProgress=None):
             "segments": outSegments,
         }
         _writeTranscript(dst, data)
-        print(f"[transcribe] {label}: done — {info.duration:.0f}s of audio "
-              f"in {time.time() - t0:.0f}s, {len(outSegments)} segments",
+        elapsed = time.time() - t0
+        rate = (f", {info.duration / elapsed:.1f}x realtime"
+                if elapsed > 0 and info.duration else "")
+        print(f"[transcribe] {label}: done — {_hms(info.duration)} of audio "
+              f"in {_hms(elapsed)}{rate}, {len(outSegments)} segments",
               flush=True)
         return data
     finally:
@@ -468,7 +481,7 @@ def _runTranslation(path, lang, label, onProgress=None):
             onProgress(int(i / max(len(segs), 1) * 100))
     data.setdefault("translations", {})[lang] = out
     _writeTranscript(path, data)
-    print(f"[translate] {label} -> {lang}: done in {time.time()-t0:.0f}s",
+    print(f"[translate] {label} -> {lang}: done in {_hms(time.time()-t0)}",
           flush=True)
     return data
 
@@ -570,7 +583,7 @@ def _runConvert(src, dst, label, onProgress=None):
     tmp = dst.with_suffix(".part.mp4")
     try:
         dur = _mediaDuration(src)
-        print(f"[convert] {label}: starting ({dur:.0f}s)", flush=True)
+        print(f"[convert] {label}: starting ({_hms(dur)})", flush=True)
         t0 = time.time()
         proc = subprocess.Popen(
             [FFMPEG, "-y", "-i", str(src),
@@ -597,7 +610,7 @@ def _runConvert(src, dst, label, onProgress=None):
             raise RuntimeError(tail[-1] if tail else
                                f"ffmpeg exit {proc.returncode}")
         tmp.replace(dst)
-        print(f"[convert] {label}: done in {time.time() - t0:.0f}s -> "
+        print(f"[convert] {label}: done in {_hms(time.time() - t0)} -> "
               f"{dst.name}", flush=True)
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -658,7 +671,8 @@ def getMediaRoot():
     """Media root plus the other app-wide settings the sidebar shows."""
     root = _mediaRoot()
     return {"path": str(root.resolve()), "exists": root.is_dir(),
-            "recursive": _recursive(), "useGpu": _useGpu()}
+            "recursive": _recursive(), "useGpu": _useGpu(),
+            "gpuLocked": not GPU_ALLOWED}
 
 
 @app.post("/api/mediaRoot")
@@ -674,6 +688,10 @@ async def setMediaRoot(request: Request):
     if "recursive" in body:
         updates["recursive"] = bool(body["recursive"])
     if "useGpu" in body:
+        if not GPU_ALLOWED:
+            raise HTTPException(
+                403, "GPU transcription is disabled in this environment "
+                     "(set TRANSCRIBINATOR_ALLOW_GPU=1 to enable)")
         updates["useGpu"] = bool(body["useGpu"])
     if not updates:
         raise HTTPException(400, "nothing to update")
@@ -954,6 +972,7 @@ def _cliTranscribe(args):
         return 2
 
     print(f"{len(files)} file(s) to process", flush=True)
+    batchStart = time.time()
     failed = 0
     for i, src in enumerate(files, 1):
         label = src.name
@@ -1006,7 +1025,8 @@ def _cliTranscribe(args):
             failed += 1
 
     done = len(files) - failed
-    print(f"=== {done} ok, {failed} failed", flush=True)
+    print(f"=== {done} ok, {failed} failed in {_hms(time.time() - batchStart)}",
+          flush=True)
     return 1 if failed else 0
 
 
