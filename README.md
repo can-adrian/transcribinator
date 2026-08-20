@@ -14,7 +14,7 @@ some other program, the next free one is used. Stop it with the the app's ⏻
 button, or by closing the console.
 
 The startup line reports the version and active media root, e.g.
-`Transcribinator v1.17.4 — model=medium  media=D:\shows\...`.
+`Transcribinator v1.18.0 — model=medium  media=D:\shows\...`.
 
 For a step-by-step walkthrough aimed at someone installing this for the first
 time on a studio workstation, see `local_install_instructions.txt`.
@@ -44,11 +44,15 @@ directly instead of waiting on a network timeout first. `package.py` sets this
 in `post_commands()`.
 
 **Translation packs** (optional, for subtitles) — put the `.argosmodel` files
-in a folder and point at it:
+in a folder, together with the MiniSBD sentence model `en.onnx` (about 190 KB,
+from the LibreTranslate/MiniSBD releases), and point at it:
 
     set TRANSCRIBINATOR_ARGOS_DIR=\\tools\models\argos
 
-They are installed on first use, and logged as `[argos]` lines. Without them
+They are installed on first use, and logged as `[argos]` lines. Argos splits
+text into sentences before translating, and its default splitter fetches a
+resource index from GitHub, so Transcribinator forces the offline MiniSBD
+splitter instead (override with `ARGOS_CHUNK_TYPE`). Without any of this,
 everything except subtitle translation works normally.
 
 Both can be set studio-wide in `post_commands()` in `package.py`.
@@ -102,8 +106,9 @@ which sets that as the media root before the UI opens. `serve` is implied;
 
 Job failures (transcribe, convert, translate) are printed to the terminal with
 a traceback as well as shown in the UI, so a console left open doubles as the
-log. Completed jobs report their timing as `HH:MM:SS`, and transcription also
-reports how much faster than realtime it ran — useful for estimating how long
+log. Every job line carries a wall clock stamp, and progress lines appear every
+10% or every 30 seconds, with elapsed time and an ETA, so a long call never
+looks stalled. Transcription also reports how much faster than realtime it ran — useful for estimating how long
 a batch will take:
 
     [transcribe] call.mov: done — 00:52:14 of audio in 00:11:38, 4.5x realtime, 812 segments

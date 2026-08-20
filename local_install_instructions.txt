@@ -55,7 +55,7 @@ Confirm it registered:
 The browser opens automatically at http://127.0.0.1:8765 and the terminal
 shows something like:
 
-    Transcribinator v1.17.4 — model=/ice/shared/adts/neural_networks (cpu)
+    Transcribinator v1.18.0 — model=/ice/shared/adts/neural_networks (cpu)
       media=/ice/shared/adts/2026_vacay_handovers
       config=/users/<you>/.config/transcribinator  http://127.0.0.1:8765
 
@@ -93,8 +93,8 @@ Open a new shell, and `transcribinator` works from anywhere.
 
   b. Click "transcribe" next to a recording. Progress shows as a percentage
      in the sidebar and as [transcribe] lines in the terminal. A one hour
-     call takes roughly 10-20 minutes on CPU; the terminal reports the
-     speed, e.g. "4.5x realtime".
+     call takes roughly 10-30 minutes on CPU. The lines are timestamped and
+     show elapsed time and an ETA, updating at least every 30 seconds.
 
   c. Once done, click the recording to load it. Type a word in the search
      box at the bottom and press Enter to make it a chip. Matches highlight
@@ -145,7 +145,11 @@ Video will not play, transcript works fine
     files were updated but the server was not restarted.
 
 Subtitle translation fails
-    Needs the argostranslate packages and the .argosmodel language packs.
+    Needs the argostranslate packages, the .argosmodel language packs, and
+    the MiniSBD sentence model en.onnx (about 190 KB) from
+    https://github.com/LibreTranslate/MiniSBD/releases/download/v0.0.1/en.onnx
+    All of these go in the folder TRANSCRIBINATOR_ARGOS_DIR points at.
+    Without en.onnx, argos tries to download a sentence model and fails.
     Everything else works without them; the Subs dropdown still offers the
     original language.
 

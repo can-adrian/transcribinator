@@ -18,7 +18,8 @@ Environment:
     TRANSCRIBINATOR_CONFIG     user config dir  (default per-user config dir)
     TRANSCRIBINATOR_PORT       listen port      (default 8765)
     TRANSCRIBINATOR_NO_BROWSER set to skip auto-opening the browser
-    TRANSCRIBINATOR_ARGOS_DIR  folder of staged .argosmodel translation packs
+    TRANSCRIBINATOR_ARGOS_DIR  folder of staged .argosmodel packs, plus the
+                               MiniSBD sentence model (en.onnx)
     TRANSCRIBINATOR_ALLOW_GPU  set to expose the GPU option (needs CUDA)
 
 The pre-1.11 CALL_MEDIA / CALL_SEARCH_* names are still honoured as fallbacks.
@@ -31,6 +32,7 @@ import json
 import os
 import queue
 import re
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -99,6 +101,15 @@ for _old, _new in ((ROOT / "syn_config.json", CONFIG_PATH),
             pass
 
 
+def _log(msg):
+    """Job logging with a wall clock stamp, so a long run can be timed."""
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def _eta(elapsed, pct):
+    return _hms(elapsed / pct * (100 - pct)) if pct > 0 else "--:--:--"
+
+
 def _hms(seconds):
     """Seconds -> HH:MM:SS, for job timings in the terminal."""
     s = max(0, int(round(seconds)))
@@ -107,7 +118,7 @@ def _hms(seconds):
 
 def _logError(label, exc):
     """Report a job failure in the terminal as well as in the UI."""
-    print(f"[error] {label}: {exc}", flush=True)
+    _log(f"[error] {label}: {exc}")
     traceback.print_exc()
 
 
@@ -127,11 +138,16 @@ MEDIA_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".mp3", ".wav", ".m4a", "
 # a size name ("medium"), or a path to a locally staged converted model
 MODEL_SIZE = os.environ.get("WHISPER_MODEL", "medium")
 ARGOS_DIR = _env("ARGOS_DIR")
+# Argos splits text into sentences before translating. Its default picks
+# Stanza when the language pack ships one, and Stanza fetches a resource index
+# from GitHub on first use — no good offline. MiniSBD needs only a small local
+# .onnx per source language, so prefer it. Override with ARGOS_CHUNK_TYPE.
+os.environ.setdefault("ARGOS_CHUNK_TYPE", "MINISBD")
 # GPU transcription is locked off unless the site opts in, because it needs a
 # working CUDA stack. Set TRANSCRIBINATOR_ALLOW_GPU=1 to expose the checkbox.
 GPU_ALLOWED = bool(_env("ALLOW_GPU"))
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
-APP_VERSION = "1.17.4"
+APP_VERSION = "1.18.0"
 
 app = FastAPI(title=APP_NAME)
 
@@ -334,7 +350,7 @@ def _runTranscription(src, dst, label, onProgress=None):
                 + f"  [{src}]")
 
         model = _getModel()
-        print(f"[transcribe] {label}: starting", flush=True)
+        _log(f"[transcribe] {label}: starting")
         t0 = time.time()
         segments, info = model.transcribe(
             str(tmpWav),
@@ -343,8 +359,10 @@ def _runTranscription(src, dst, label, onProgress=None):
             vad_parameters={"min_silence_duration_ms": 1000},
             condition_on_previous_text=False,
         )
+        _log(f"[transcribe] {label}: {_hms(info.duration)} of audio, "
+             f"model={MODEL_SIZE} on {_modelDevice}")
         outSegments = []
-        lastPrinted = -10
+        lastPrinted, lastPrintTime = -10, time.time()
         for seg in segments:
             outSegments.append({
                 "start": round(seg.start, 3),
@@ -358,10 +376,14 @@ def _runTranscription(src, dst, label, onProgress=None):
             pct = int(seg.end / info.duration * 100) if info.duration else 0
             if onProgress:
                 onProgress(min(pct, 99))
-            if pct >= lastPrinted + 10:
-                print(f"[transcribe] {label}: {pct}%  "
-                      f"({seg.end:.0f}s / {info.duration:.0f}s)", flush=True)
-                lastPrinted = pct
+            # every 10%, but at least every 30s so a long call still ticks over
+            now = time.time()
+            if pct >= lastPrinted + 10 or now - lastPrintTime >= 30:
+                elapsed = now - t0
+                _log(f"[transcribe] {label}: {pct}%  "
+                     f"{_hms(seg.end)}/{_hms(info.duration)}  "
+                     f"elapsed {_hms(elapsed)}  eta {_eta(elapsed, pct)}")
+                lastPrinted, lastPrintTime = pct, now
         data = {
             "file": Path(label).as_posix(),
             "language": info.language,
@@ -374,9 +396,8 @@ def _runTranscription(src, dst, label, onProgress=None):
         elapsed = time.time() - t0
         rate = (f", {info.duration / elapsed:.1f}x realtime"
                 if elapsed > 0 and info.duration else "")
-        print(f"[transcribe] {label}: done — {_hms(info.duration)} of audio "
-              f"in {_hms(elapsed)}{rate}, {len(outSegments)} segments",
-              flush=True)
+        _log(f"[transcribe] {label}: done — {_hms(info.duration)} of audio "
+             f"in {_hms(elapsed)}{rate}, {len(outSegments)} segments")
         return data
     finally:
         tmpWav.unlink(missing_ok=True)
@@ -416,6 +437,34 @@ _transQueue = queue.Queue()
 _argosTried = False
 
 
+def _stageMiniSbd():
+    """Copy staged MiniSBD .onnx models into the cache MiniSBD reads from.
+
+    Drop en.onnx alongside the .argosmodel packs and translation works with no
+    network at all. Without it, MiniSBD would try to download the model.
+    """
+    if not ARGOS_DIR:
+        return
+    models = sorted(Path(ARGOS_DIR).expanduser().glob("*.onnx"))
+    if not models:
+        return
+    try:
+        from argostranslate import settings as argosSettings
+        dest = Path(argosSettings.data_dir) / "minisbd"
+        dest.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        _log(f"[argos] could not prepare the MiniSBD cache: {exc}")
+        return
+    for model in models:
+        target = dest / model.name
+        if not target.exists():
+            try:
+                shutil.copy2(model, target)
+                _log(f"[argos] staged sentence model {model.name}")
+            except OSError as exc:
+                _log(f"[argos] could not stage {model.name}: {exc}")
+
+
 def _installStagedArgos():
     """Install .argosmodel packs from a local folder (no internet needed).
 
@@ -427,6 +476,7 @@ def _installStagedArgos():
     if _argosTried or not ARGOS_DIR:
         return False
     _argosTried = True
+    _stageMiniSbd()
     folder = Path(ARGOS_DIR).expanduser()
     if not folder.is_dir():
         print(f"[argos] TRANSCRIBINATOR_ARGOS_DIR is not a folder: {folder}",
@@ -447,6 +497,7 @@ def _installStagedArgos():
 
 
 def _argosTranslator(lang, retry=True):
+    _stageMiniSbd()
     from argostranslate import translate
     installed = translate.get_installed_languages()
     src = next((l for l in installed if l.code == "en"), None)
@@ -472,17 +523,25 @@ def _runTranslation(path, lang, label, onProgress=None):
     if tr is None:
         raise RuntimeError(_INSTALL_HINT.format(lang=lang))
     segs = data.get("segments", [])
-    print(f"[translate] {label} -> {lang}: {len(segs)} segments", flush=True)
+    _log(f"[translate] {label} -> {lang}: starting, {len(segs)} segments")
     t0 = time.time()
     out = []
+    lastPrintTime = time.time()
     for i, s in enumerate(segs):
         out.append(tr.translate(s["text"]) if s["text"] else "")
-        if onProgress and i % 10 == 0:
-            onProgress(int(i / max(len(segs), 1) * 100))
+        if i % 10 == 0:
+            pct = int(i / max(len(segs), 1) * 100)
+            if onProgress:
+                onProgress(pct)
+            now = time.time()
+            if now - lastPrintTime >= 30:
+                elapsed = now - t0
+                _log(f"[translate] {label} -> {lang}: {pct}%  {i}/{len(segs)}  "
+                     f"elapsed {_hms(elapsed)}  eta {_eta(elapsed, pct)}")
+                lastPrintTime = now
     data.setdefault("translations", {})[lang] = out
     _writeTranscript(path, data)
-    print(f"[translate] {label} -> {lang}: done in {_hms(time.time()-t0)}",
-          flush=True)
+    _log(f"[translate] {label} -> {lang}: done in {_hms(time.time()-t0)}")
     return data
 
 
@@ -583,7 +642,7 @@ def _runConvert(src, dst, label, onProgress=None):
     tmp = dst.with_suffix(".part.mp4")
     try:
         dur = _mediaDuration(src)
-        print(f"[convert] {label}: starting ({_hms(dur)})", flush=True)
+        _log(f"[convert] {label}: starting, {_hms(dur)} of media")
         t0 = time.time()
         proc = subprocess.Popen(
             [FFMPEG, "-y", "-i", str(src),
@@ -593,7 +652,7 @@ def _runConvert(src, dst, label, onProgress=None):
              "-progress", "pipe:1", "-nostats", str(tmp)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             errors="replace")
-        lastPrinted = -20
+        lastPrinted, lastPrintTime = -20, time.time()
         for line in proc.stdout:
             if line.startswith("out_time_us=") and dur:
                 us = line.strip().split("=")[1]
@@ -601,17 +660,20 @@ def _runConvert(src, dst, label, onProgress=None):
                     pct = min(int(int(us) / 1e6 / dur * 100), 99)
                     if onProgress:
                         onProgress(pct)
-                    if pct >= lastPrinted + 20:
-                        print(f"[convert] {label}: {pct}%", flush=True)
-                        lastPrinted = pct
+                    now = time.time()
+                    if pct >= lastPrinted + 20 or now - lastPrintTime >= 30:
+                        elapsed = now - t0
+                        _log(f"[convert] {label}: {pct}%  elapsed "
+                             f"{_hms(elapsed)}  eta {_eta(elapsed, pct)}")
+                        lastPrinted, lastPrintTime = pct, now
         proc.wait()
         if proc.returncode != 0:
             tail = (proc.stderr.read() or "").strip().splitlines()
             raise RuntimeError(tail[-1] if tail else
                                f"ffmpeg exit {proc.returncode}")
         tmp.replace(dst)
-        print(f"[convert] {label}: done in {_hms(time.time() - t0)} -> "
-              f"{dst.name}", flush=True)
+        _log(f"[convert] {label}: done in {_hms(time.time() - t0)} -> "
+             f"{dst.name}")
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise

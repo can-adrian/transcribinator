@@ -1,6 +1,6 @@
 name = "transcribinator"
 
-version = "1.17.4"       # keep in sync with APP_VERSION in server.py
+version = "1.18.0"       # keep in sync with APP_VERSION in server.py
                         # (build.py fails the build if these drift)
 
 description = "Transcribinator — offline transcription, search, annotation " \
