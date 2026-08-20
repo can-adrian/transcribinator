@@ -82,7 +82,7 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 
 /* ---------- main ---------- */
 #main{display:flex;flex-direction:column;min-width:0;min-height:0;grid-row:1;
-  position:relative}
+  position:relative;overflow:hidden}
 /* playback position within the transcript, drawn beside the scrollbar */
 #posMark{position:absolute;right:0;width:10px;height:4px;border-radius:2px;
   background:var(--accent);display:none;z-index:6;cursor:pointer;
@@ -147,7 +147,7 @@ body.resizing #video{pointer-events:none}
 .navBtn:hover{color:var(--text);border-color:var(--accent-dim)}
 
 /* transcript */
-#transcript{flex:1;overflow-y:auto;padding:12px 0 40vh;min-height:0}
+#transcript{flex:1;overflow-y:auto;padding:12px 0 22vh;min-height:0}
 .seg{display:flex;gap:14px;padding:6px 20px;cursor:pointer}
 .seg:hover{background:var(--panel)}
 .seg.current{background:var(--panel2);box-shadow:inset 2px 0 0 var(--accent)}
@@ -527,12 +527,20 @@ async function selectVideo(it,seekTo){
     currentItem=it;
     hideConvBar();convPollToken++;
     video.src='/media/'+encPath(it.converted?it.stem+'_converted.mp4':it.file);
-    if(it.converted)video.title='playing converted proxy';
-    transcript=null;segEls=[];matches=[];matchIdx=-1;
+    video.title=it.converted?'playing converted proxy':'';
+
+    // Wipe everything tied to the previous call up front. Nothing here knows
+    // whether the new one has a transcript yet, and leftovers (subtitle track,
+    // strip ticks, annotation flags) would otherwise belong to the old video.
+    clearSubTrack();
+    subPollToken++;                     // cancel any in-flight translation poll
+    $('subStatus').textContent='';
+    transcript=null;segEls=[];matches=[];matchIdx=-1;annotations=[];
     matchCount.textContent='';
     transcriptEl.innerHTML='';
+    drawTicks();drawAnnos();updatePosMark();
+
     if((it.status||'').startsWith('conflict')){
-      annotations=[];drawAnnos();drawTicks();
       transcriptEl.innerHTML='<div id="placeholder"><div class="k">NAME COLLISION</div><p style="margin-top:10px">The transcript json next to this file belongs to <b>'+esc(it.status.slice(9))+'</b>.<br>Rename one of the two media files, then hit the &#10227; refresh.</p></div>';
       loadVideos();
       return;
@@ -542,13 +550,12 @@ async function selectVideo(it,seekTo){
       transcript=await r.json();
       transcriptCache[it.stem]=transcript;
       annotations=transcript.annotations||[];
-      renderTranscript();drawAnnos();ensureSubs();
-
+      renderTranscript();drawAnnos();
     }
     else{
-      annotations=[];drawAnnos();
       transcriptEl.innerHTML='<div id="placeholder"><div class="k">NO TRANSCRIPT YET</div><p style="margin-top:10px">Hit <b>transcribe</b> on this recording in the sidebar.</p></div>';
     }
+    ensureSubs();                       // re-adds subs, or clears if no transcript
     if($('annoPane').style.display==='block')renderAnnoRows();
     if($('cloudPane').style.display==='block')buildCloud();
     loadVideos();
@@ -869,7 +876,14 @@ function scrollToCurrent(){
   if(cur)cur.el.scrollIntoView({block:'center',behavior:'smooth'});
 }
 $('posMark').onclick=scrollToCurrent;
-window.addEventListener('resize',updatePosMark);
+window.addEventListener('resize',()=>{
+  // re-clamp: a height saved on a bigger window would overflow this one
+  setPlayerHeight(playerWrap.getBoundingClientRect().height);
+  updatePosMark();
+});
+// the first clamp runs before the browser has finished laying out
+window.addEventListener('load',()=>
+  setPlayerHeight(playerWrap.getBoundingClientRect().height));
 
 video.addEventListener('timeupdate',()=>{
   const t=video.currentTime;
@@ -1058,7 +1072,7 @@ window.addEventListener('resize',()=>{
 /* ---------------- annotations ---------------- */
 let annotations=[];        // {time, text, user?} — persisted inside the transcript json
 let currentUser='';
-const EXPECTED_SERVER='1.19.0';
+const EXPECTED_SERVER='1.19.2';
 function setVersionLabel(v){
   $('verTag').textContent='v'+v;
   document.title='Transcribinator '+v;
@@ -1174,11 +1188,18 @@ $('annoAddHere').onclick=()=>{
 const DEFAULT_PLAYER_H=Math.round(window.innerHeight*0.46);
 const splitter=$('splitter'), playerWrap=$('playerWrap');
 
+// Largest the player may be while the strip, tabs and a usable slice of the
+// pane below still fit. Measured, not guessed from window height, so it stays
+// correct whatever the surrounding chrome is doing.
+function playerMax(){
+  const chrome=strip.offsetHeight+splitter.offsetHeight+$('tabBar').offsetHeight;
+  return Math.max(160,$('main').clientHeight-chrome-140);
+}
 function setPlayerHeight(px,save){
-  const max=window.innerHeight-220;          // keep tabs + some transcript visible
-  const h=Math.max(120,Math.min(px,Math.max(160,max)));
+  const h=Math.max(120,Math.min(px,playerMax()));
   playerWrap.style.height=h+'px';
   if(save){try{localStorage.setItem('playerHeight',h);}catch(e){}}
+  updatePosMark();
 }
 try{
   const saved=parseInt(localStorage.getItem('playerHeight'),10);
