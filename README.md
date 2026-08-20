@@ -6,13 +6,15 @@ machine can be fully air-gapped.
 
     python server.py          # -> http://127.0.0.1:8765   (dev / standalone)
 
-The browser opens automatically. Launching a second time just opens the
-existing instance rather than failing; if the port is taken by something else,
-the next free one is used. Stop it with the ⏻ button in the app, or by closing
-the console.
+The browser opens automatically. Only one instance runs at a time: launching
+again while one is up prompts to open the running one, stop it and start
+fresh, or cancel. In a script (no terminal attached) it errors instead; pass
+`--force` to stop the running instance and take over. If the port is taken by
+some other program, the next free one is used. Stop it with the the app's ⏻
+button, or by closing the console.
 
 The startup line reports the version and active media root, e.g.
-`Transcribinator v1.16.2 — model=medium  media=D:\shows\...`.
+`Transcribinator v1.17.0 — model=medium  media=D:\shows\...`.
 
 ## Setup
 

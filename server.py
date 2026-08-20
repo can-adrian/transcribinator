@@ -131,7 +131,7 @@ ARGOS_DIR = _env("ARGOS_DIR")
 # working CUDA stack. Set TRANSCRIBINATOR_ALLOW_GPU=1 to expose the checkbox.
 GPU_ALLOWED = bool(_env("ALLOW_GPU"))
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
-APP_VERSION = "1.16.2"
+APP_VERSION = "1.17.0"
 
 app = FastAPI(title=APP_NAME)
 
@@ -888,6 +888,7 @@ async def setAnnotations(stem: str, request: Request):
 def quitServer():
     def _stop():
         time.sleep(0.4)          # let the response flush first
+        _clearLock()
         os._exit(0)
     threading.Thread(target=_stop, daemon=True).start()
     return {"ok": True}
@@ -926,6 +927,9 @@ def _isOurServer(port):
 
 def _portFree(port):
     s = socket.socket()
+    # uvicorn binds with SO_REUSEADDR, so probe the same way: a port left in
+    # TIME_WAIT by a just-stopped instance is still usable.
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         s.bind(("127.0.0.1", port))
         return True
@@ -933,6 +937,103 @@ def _portFree(port):
         return False
     finally:
         s.close()
+
+
+# ---- single instance -------------------------------------------------------
+# A lock file records the running instance so a second launch can attach to it
+# (or offer to replace it) rather than quietly starting on another port.
+LOCK_PATH = CONFIG_DIR / "instance.json"
+
+
+def _readLock():
+    try:
+        data = json.loads(LOCK_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data.get("port"), int) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _clearLock():
+    lock = _readLock()
+    if lock and lock.get("pid") == os.getpid():
+        LOCK_PATH.unlink(missing_ok=True)
+
+
+def _writeLock(port):
+    import atexit
+    LOCK_PATH.write_text(json.dumps(
+        {"pid": os.getpid(), "port": port, "started": time.time()}),
+        encoding="utf-8")
+    atexit.register(_clearLock)
+
+
+def _killInstance(pid, port):
+    """Stop a running instance. Returns True once its port stops answering."""
+    print(f"stopping the running instance (pid {pid})…", flush=True)
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"],
+                           capture_output=True)
+        else:
+            import signal
+            os.kill(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError) as exc:
+        print(f"could not stop pid {pid}: {exc}", flush=True)
+    for _ in range(20):                       # up to ~5s for it to let go
+        time.sleep(0.25)
+        if not _isOurServer(port) and _portFree(port):
+            return True
+    return False
+
+
+def _runningInstance():
+    """(pid, port) of a live instance, or None. Cleans up a stale lock."""
+    lock = _readLock()
+    if lock and _isOurServer(lock["port"]):
+        return lock.get("pid"), lock["port"]
+    if lock:
+        LOCK_PATH.unlink(missing_ok=True)      # stale: process is gone
+    if _isOurServer(PORT):                     # running without a lock file
+        return None, PORT
+    return None
+
+
+def _handleExisting(pid, port, force):
+    """Attach to, replace, or refuse alongside an existing instance.
+
+    Returns None to carry on starting, or an exit code to stop here.
+    """
+    import sys
+    url = f"http://127.0.0.1:{port}"
+    if force:
+        if _killInstance(pid, port) if pid else False:
+            return None
+        print(f"ERROR: could not stop the instance at {url}.", flush=True)
+        return 1
+    if not sys.stdin.isatty():
+        print(f"ERROR: {APP_NAME} is already running at {url}"
+              + (f" (pid {pid})" if pid else "")
+              + ".\n       Use --force to replace it, or stop it first.",
+              flush=True)
+        return 1
+    print(f"\n{APP_NAME} is already running at {url}"
+          + (f" (pid {pid})" if pid else "") + "\n"
+          "  [o] open it in the browser   [k] stop it and start fresh   "
+          "[c] cancel", flush=True)
+    try:
+        choice = input("> ").strip().lower()[:1] or "o"
+    except (EOFError, KeyboardInterrupt):
+        return 1
+    if choice == "o":
+        _openBrowser(url)
+        return 0
+    if choice == "k":
+        if pid and _killInstance(pid, port):
+            return None
+        print("ERROR: could not stop it — check for the process by hand.",
+              flush=True)
+        return 1
+    return 0
 
 
 def _openBrowser(url):
@@ -1059,10 +1160,12 @@ def _buildParser():
     s.add_argument("root", nargs="?", metavar="FOLDER", default=None,
                    help="media root folder to open with")
     s.add_argument("--port", type=int, default=None, help="override the port")
+    s.add_argument("-f", "--force", action="store_true",
+                   help="stop any running instance and take over")
     return p
 
 
-def _serve(portOverride=None, root=None):
+def _serve(portOverride=None, root=None, force=False):
     import sys
 
     if root:
@@ -1073,16 +1176,15 @@ def _serve(portOverride=None, root=None):
         _writeCfg(mediaRoot=str(folder))
         print(f"media root set to {folder}", flush=True)
 
+    existing = _runningInstance()
+    if existing:
+        outcome = _handleExisting(existing[0], existing[1], force)
+        if outcome is not None:
+            return outcome
+
     port = portOverride or PORT
     if not _portFree(port):
-        if _isOurServer(port):
-            # already running — just bring it up in the browser and exit
-            url = f"http://127.0.0.1:{port}"
-            print(f"{APP_NAME} is already running at {url} — opening it.",
-                  flush=True)
-            _openBrowser(url)
-            return 0
-        # something else owns the port: move to the next free one
+        # not us (that was handled above): something else owns the port
         port = next((p for p in range(port + 1, port + 21) if _portFree(p)), None)
         if port is None:
             print(f"ERROR: ports {PORT}-{PORT + 20} are all in use. "
@@ -1095,6 +1197,7 @@ def _serve(portOverride=None, root=None):
     if _indexPath() is None:
         print(f"WARNING: index.html not found in {ROOT / 'static'} or {ROOT} — "
               "the page will not load until it is in one of those.", flush=True)
+    _writeLock(port)
     print(f"{APP_NAME} v{APP_VERSION} — model={MODEL_SIZE} "
           f"({'gpu' if _useGpu() else 'cpu'})  "
           f"media={_mediaRoot()}\n  config={CONFIG_DIR}  {url}\n"
@@ -1116,4 +1219,5 @@ if __name__ == "__main__":
     parsed = _buildParser().parse_args(argv)
     if parsed.command == "transcribe":
         sys.exit(_cliTranscribe(parsed))
-    sys.exit(_serve(getattr(parsed, "port", None), getattr(parsed, "root", None)))
+    sys.exit(_serve(getattr(parsed, "port", None), getattr(parsed, "root", None),
+                    getattr(parsed, "force", False)))
