@@ -55,7 +55,7 @@ Confirm it registered:
 The browser opens automatically at http://127.0.0.1:8765 and the terminal
 shows something like:
 
-    Transcribinator v1.18.1 — model=/ice/shared/adts/neural_networks (cpu)
+    Transcribinator v1.19.0 — model=/ice/shared/adts/neural_networks (cpu)
       media=/ice/shared/adts/2026_vacay_handovers
       config=/users/<you>/.config/transcribinator  http://127.0.0.1:8765
 
@@ -101,7 +101,11 @@ Open a new shell, and `transcribinator` works from anywhere.
      in the transcript, appear as coloured ticks on the strip under the
      video, and as mini-bars under every recording in the sidebar.
 
-  d. Right-click the strip to add an annotation at that point in the call.
+  d. Double-click a transcript line to jump the video there. The transcript
+     does not auto-scroll; the amber tick beside its scrollbar shows where
+     playback is, and clicking that tick scrolls to it.
+
+  e. Right-click the strip to add an annotation at that point in the call.
 
 Transcripts are written next to each movie as <name>_transcript.json, so
 they travel with the media and are readable/editable by hand.

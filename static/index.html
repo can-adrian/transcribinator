@@ -81,7 +81,13 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 .emptyNote{padding:12px 16px;color:var(--dim);font-size:12.5px}
 
 /* ---------- main ---------- */
-#main{display:flex;flex-direction:column;min-width:0;min-height:0;grid-row:1}
+#main{display:flex;flex-direction:column;min-width:0;min-height:0;grid-row:1;
+  position:relative}
+/* playback position within the transcript, drawn beside the scrollbar */
+#posMark{position:absolute;right:0;width:10px;height:4px;border-radius:2px;
+  background:var(--accent);display:none;z-index:6;cursor:pointer;
+  box-shadow:0 0 0 1px rgba(0,0,0,.55)}
+#posMark:hover{width:14px}
 #playerWrap{background:#000;flex:none;position:relative;height:46vh;min-height:120px}
 #subCtl{position:absolute;top:8px;right:8px;z-index:3;display:flex;gap:6px;align-items:center}
 #subSelect{background:rgba(20,22,27,.85);color:var(--text);border:1px solid var(--line);
@@ -298,6 +304,7 @@ mark.focusMatch{outline:2px solid var(--text)}
     <div id="annoRows" style="margin-top:14px"></div>
     <div id="annoStatus"></div>
   </div>
+  <div id="posMark"></div>
   <div id="annoPop">
     <div class="tcLabel"></div>
     <input placeholder="Annotation text… (Enter to save, Esc to cancel)" spellcheck="false">
@@ -322,7 +329,7 @@ const video=$('video'), strip=$('strip'), playhead=$('playhead'), progress=$('pr
 const transcriptEl=$('transcript'), searchInput=$('searchInput'), matchCount=$('matchCount');
 
 let currentStem=null, currentItem=null, transcript=null, matches=[], matchIdx=-1;
-let segEls=[], lastUserScroll=0, pollTimer=null;
+let segEls=[], pollTimer=null;
 
 const fmtTc=t=>{
   t=Math.max(0,t);
@@ -715,13 +722,15 @@ function renderTranscript(){
       html=out+esc(raw.slice(i));
     }else html=esc(raw);
     div.innerHTML=`<span class="tc">${fmtTc(seg.start)}</span><span class="tx">${html}</span>`;
-    div.onclick=()=>seek(seg.start);
+    div.ondblclick=()=>seek(seg.start);   // single click leaves text selectable
+    div.title='Double-click to jump here';
     transcriptEl.appendChild(div);
     segEls.push({el:div,start:seg.start,end:seg.end});
   }
   drawTicks();
   matchIdx=-1;
   updateMatchCount();
+  updatePosMark();
 }
 
 // map a character offset within a segment's joined word text to a word start time
@@ -824,7 +833,6 @@ function gotoMatch(i){
   document.querySelectorAll('mark.focusMatch').forEach(m=>m.classList.remove('focusMatch'));
   const mk=transcriptEl.querySelector(`mark[data-m="${matchIdx}"]`);
   if(mk){mk.classList.add('focusMatch');mk.scrollIntoView({block:'center',behavior:'smooth'});}
-  lastUserScroll=Date.now();          // don't let follow-scroll fight the jump
   seek(matches[matchIdx].time);
   updateMatchCount();
 }
@@ -840,21 +848,37 @@ $('nextBtn').onclick=()=>gotoMatch(matchIdx+1);
 $('prevBtn').onclick=()=>gotoMatch(matchIdx-1);
 
 /* ---------------- playback follow ---------------- */
-transcriptEl.addEventListener('scroll',()=>lastUserScroll=Date.now(),{passive:true});
+// The transcript deliberately does not follow playback — scrolling out from
+// under the reader is more annoying than useful. Instead a tick beside the
+// scrollbar shows where playback is; click it to jump the view there.
+function updatePosMark(){
+  const mark=$('posMark');
+  if(!transcript||!transcript.duration||$('transcript').style.display==='none'){
+    mark.style.display='none';return;
+  }
+  const r=transcriptEl.getBoundingClientRect(), m=$('main').getBoundingClientRect();
+  if(!r.height){mark.style.display='none';return;}
+  const frac=Math.min(1,Math.max(0,video.currentTime/transcript.duration));
+  mark.style.display='block';
+  mark.style.top=(r.top-m.top+frac*(r.height-4))+'px';
+  mark.title='Playback is here — click to scroll to it ('+fmtTc(video.currentTime)+')';
+}
+function scrollToCurrent(){
+  const cur=segEls.find(s=>video.currentTime>=s.start&&video.currentTime<s.end)
+        || segEls.find(s=>s.start>=video.currentTime);
+  if(cur)cur.el.scrollIntoView({block:'center',behavior:'smooth'});
+}
+$('posMark').onclick=scrollToCurrent;
+window.addEventListener('resize',updatePosMark);
+
 video.addEventListener('timeupdate',()=>{
   const t=video.currentTime;
   if(transcript&&transcript.duration){
     playhead.style.left=(t/transcript.duration*100)+'%';
     progress.style.width=(t/transcript.duration*100)+'%';
   }
-  let cur=null;
-  for(const s of segEls){
-    const on=t>=s.start&&t<s.end;
-    s.el.classList.toggle('current',on);
-    if(on)cur=s.el;
-  }
-  if(cur&&Date.now()-lastUserScroll>4000&&!video.paused)
-    cur.scrollIntoView({block:'center',behavior:'smooth'});
+  for(const s of segEls)s.el.classList.toggle('current',t>=s.start&&t<s.end);
+  updatePosMark();
 });
 
 /* ---------------- keyboard ---------------- */
@@ -879,6 +903,7 @@ document.querySelectorAll('.tab').forEach(tab=>{
     if(which==='synonyms'&&!$('synRows').children.length)renderSynRows();
     if(which==='cloud')buildCloud();
     if(which==='annos')renderAnnoRows();
+    updatePosMark();
   };
 });
 function showTab(name){document.querySelector(`.tab[data-tab="${name}"]`).click();}
@@ -1033,7 +1058,7 @@ window.addEventListener('resize',()=>{
 /* ---------------- annotations ---------------- */
 let annotations=[];        // {time, text, user?} — persisted inside the transcript json
 let currentUser='';
-const EXPECTED_SERVER='1.18.1';
+const EXPECTED_SERVER='1.19.0';
 function setVersionLabel(v){
   $('verTag').textContent='v'+v;
   document.title='Transcribinator '+v;
