@@ -1,0 +1,182 @@
+TRANSCRIBINATOR — LOCAL INSTALL
+===============================
+
+Offline transcription, search, annotation and subtitling for recorded client
+calls. Runs as a local web app; nothing leaves the machine.
+
+These are the steps for getting it running on a studio Linux workstation
+(Rocky 9, rez). Aimed at someone who has never run it before.
+
+
+--------------------------------------------------------------------------
+1. GET THE DEPENDENCY PACKAGES
+--------------------------------------------------------------------------
+The python packages Transcribinator needs currently live in a local rez
+package path rather than a shared release. Copy them into yours:
+
+    python install_packages.py --user <YOUR_USERNAME> --dry-run   # preview
+    python install_packages.py --user <YOUR_USERNAME>             # do it
+
+This resolves the context, works out which packages came from the source
+user's area, and rsyncs exactly those. It never deletes anything at the
+destination. Expect a few GB, mostly torch.
+
+Check it worked:
+
+    rez-env python-3.11 fastapi uvicorn faster_whisper imageio_ffmpeg \
+        -- python -c "import fastapi, uvicorn, faster_whisper; print('OK')"
+
+If that fails, see TROUBLESHOOTING below — it is almost always a package
+built against the wrong python version.
+
+
+--------------------------------------------------------------------------
+2. INSTALL TRANSCRIBINATOR ITSELF
+--------------------------------------------------------------------------
+From a checkout of this repo:
+
+    rez-build --install
+
+That copies the payload (server.py, static/, README, launcher) into your
+local rez packages. The build refuses to run if the version numbers in
+package.py, server.py and static/index.html disagree — that check is
+deliberate, it stops a mismatched pair being released.
+
+Confirm it registered:
+
+    rez-search transcribinator
+
+
+--------------------------------------------------------------------------
+3. RUN IT
+--------------------------------------------------------------------------
+    rez-env transcribinator -- transcribinator
+
+The browser opens automatically at http://127.0.0.1:8765 and the terminal
+shows something like:
+
+    Transcribinator v1.17.4 — model=/ice/shared/adts/neural_networks (cpu)
+      media=/ice/shared/adts/2026_vacay_handovers
+      config=/users/<you>/.config/transcribinator  http://127.0.0.1:8765
+
+Leave that terminal open — it is the log. Stop the app with the power button
+in the top left of the page, or by closing the terminal.
+
+To open straight onto a folder of recordings:
+
+    rez-env transcribinator -- transcribinator /ice/shared/adts/some_calls
+
+Only one instance runs at a time. Launching again while one is up asks
+whether to open the running one, replace it, or cancel.
+
+
+--------------------------------------------------------------------------
+4. OPTIONAL: A SHELL ALIAS
+--------------------------------------------------------------------------
+A rez alias only exists inside a resolved context, so `transcribinator` is
+not available in a plain shell. To make it so:
+
+    python install_packages.py --alias
+
+That adds this to your ~/.bashrc (backing the file up first):
+
+    alias transcribinator='rez-env transcribinator -- transcribinator'
+
+Open a new shell, and `transcribinator` works from anywhere.
+
+
+--------------------------------------------------------------------------
+5. FIRST USE
+--------------------------------------------------------------------------
+  a. Set the root folder in the sidebar — type a path, or use the "…"
+     button for a file browser. "Include subfolders" is on by default.
+
+  b. Click "transcribe" next to a recording. Progress shows as a percentage
+     in the sidebar and as [transcribe] lines in the terminal. A one hour
+     call takes roughly 10-20 minutes on CPU; the terminal reports the
+     speed, e.g. "4.5x realtime".
+
+  c. Once done, click the recording to load it. Type a word in the search
+     box at the bottom and press Enter to make it a chip. Matches highlight
+     in the transcript, appear as coloured ticks on the strip under the
+     video, and as mini-bars under every recording in the sidebar.
+
+  d. Right-click the strip to add an annotation at that point in the call.
+
+Transcripts are written next to each movie as <name>_transcript.json, so
+they travel with the media and are readable/editable by hand.
+
+
+--------------------------------------------------------------------------
+TROUBLESHOOTING
+--------------------------------------------------------------------------
+"The context failed to resolve ... python-3.10 <--!--> python-3.11"
+    A package was converted with rez pip against a different python and
+    carries a hard python==X.Y.Z pin. Find which one by resolving each
+    package on its own:
+        for p in fastapi uvicorn faster_whisper imageio_ffmpeg argostranslate; do
+            echo -n "$p: "; rez-env python-3.11 $p -- python -c "print('OK')" \
+                2>/dev/null || echo "no"
+        done
+    Whatever says "no" needs rebuilding for python-3.11.7 by the dev team.
+
+"ImportError: libcudart.so.13 / libcufile.so.0 / libnccl.so.2"
+    torch is a CUDA build and the nvidia_* packages ship their .so files
+    without adding their lib dirs to LD_LIBRARY_PATH. Report it to the dev
+    team; a CPU-only torch build would remove the whole chain. Nothing in
+    Transcribinator needs a GPU.
+
+"could not load speech model ..."
+    WHISPER_MODEL must point at a folder containing model.bin, config.json,
+    tokenizer.json and vocabulary.txt. The released package sets this for
+    you; check the startup line to see what it resolved to.
+
+"audio extraction failed: ..."
+    ffmpeg could not read the file. The message includes ffmpeg's own reason
+    — usually a corrupt file or one with no audio track.
+
+Video will not play, transcript works fine
+    Browsers only decode h264/vp9/av1. For ProRes, DNxHD and similar, a bar
+    appears under the player offering "Convert for playback", which writes an
+    h264 copy named <name>_converted.mp4 next to the original.
+
+"server.py mismatch" red banner
+    The page and the server are from different versions. Usually means the
+    files were updated but the server was not restarted.
+
+Subtitle translation fails
+    Needs the argostranslate packages and the .argosmodel language packs.
+    Everything else works without them; the Subs dropdown still offers the
+    original language.
+
+
+--------------------------------------------------------------------------
+COMMAND LINE (no UI)
+--------------------------------------------------------------------------
+Useful for batches and overnight runs:
+
+    rez-env transcribinator -- transcribinator transcribe /path/to/calls -r
+    rez-env transcribinator -- transcribinator transcribe /path -r -c \
+        --translate sv,fr
+
+    -r  recurse into subfolders
+    -f  redo work even if the output exists
+    -c  also write a browser-playable _converted.mp4
+    --translate  comma separated: sv, es, fr, de
+
+Existing transcripts are skipped unless -f is given, so re-running over a
+folder only does new work. Each file reports separately and one failure does
+not stop the rest.
+
+
+--------------------------------------------------------------------------
+WHERE THINGS LIVE
+--------------------------------------------------------------------------
+    <movie>_transcript.json   transcript, annotations and translations,
+                              next to the source movie
+    <movie>_converted.mp4     browser-playable proxy, if one was made
+    ~/.config/transcribinator/config.json    media root, recursion setting
+    ~/.config/transcribinator/synonyms.json  default synonym groups
+    ~/.config/transcribinator/instance.json  which instance is running
+
+Nothing is written inside the installed package, so it can be read-only.

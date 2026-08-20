@@ -14,7 +14,10 @@ some other program, the next free one is used. Stop it with the the app's ⏻
 button, or by closing the console.
 
 The startup line reports the version and active media root, e.g.
-`Transcribinator v1.17.3 — model=medium  media=D:\shows\...`.
+`Transcribinator v1.17.4 — model=medium  media=D:\shows\...`.
+
+For a step-by-step walkthrough aimed at someone installing this for the first
+time on a studio workstation, see `local_install_instructions.txt`.
 
 ## Setup
 
