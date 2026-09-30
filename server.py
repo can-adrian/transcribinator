@@ -28,7 +28,6 @@ Nothing is written inside the install directory, so this can be deployed as a
 read-only package (e.g. a rez release).
 """
 import getpass
-import hashlib
 import json
 import os
 import queue
@@ -148,7 +147,7 @@ os.environ.setdefault("ARGOS_CHUNK_TYPE", "MINISBD")
 # working CUDA stack. Set TRANSCRIBINATOR_ALLOW_GPU=1 to expose the checkbox.
 GPU_ALLOWED = bool(_env("ALLOW_GPU"))
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
-APP_VERSION = "1.20.0"
+APP_VERSION = "1.20.1"
 
 app = FastAPI(title=APP_NAME)
 
@@ -230,6 +229,10 @@ except OSError:
 # they go to a per-user folder instead, keyed by media root so two roots
 # cannot collide. Reading always prefers a sidecar beside the media, so a
 # colleague's transcript is still picked up.
+# Local sidecars are keyed on the movie's file name, not its path under the
+# media root, so they are still found when the root moves or is opened at a
+# different level (a show folder vs its parent). That relies on leaf names
+# being unique, which they are in practice here.
 LOCAL_SIDECARS = CONFIG_DIR / "sidecars"
 _writableCache = {}
 
@@ -249,10 +252,9 @@ def _folderWritable(folder):
     return _writableCache[key]
 
 
-def _localSidecarDir(root=None):
-    root = root or _mediaRoot()
-    key = hashlib.sha1(str(root).encode("utf-8")).hexdigest()[:12]
-    return LOCAL_SIDECARS / f"{root.name or 'root'}-{key}"
+def _localSidecarPath(stem, suffix):
+    """Local fallback for a sidecar, keyed on the movie's file name."""
+    return LOCAL_SIDECARS / f"{PurePosixPath(stem).name}{suffix}"
 
 
 def _mediaRootWritable():
@@ -262,7 +264,7 @@ def _mediaRootWritable():
 def _safeSidecar(path):
     """Guard for sidecar paths: beside the media, or in the local fallback."""
     return (_safeUnder(_mediaRoot(), path)
-            or _safeUnder(_localSidecarDir(), path))
+            or _safeUnder(LOCAL_SIDECARS, path))
 
 
 def _sidecarPath(stem, suffix):
@@ -274,7 +276,7 @@ def _sidecarPath(stem, suffix):
     beside = _mediaRoot() / f"{stem}{suffix}"
     if beside.exists():
         return beside
-    local = _localSidecarDir() / f"{stem}{suffix}"
+    local = _localSidecarPath(stem, suffix)
     if local.exists():
         return local
     return beside if _folderWritable(beside.parent) else local
@@ -796,7 +798,7 @@ def getMediaRoot():
             "recursive": _recursive(), "useGpu": _useGpu(),
             "gpuLocked": not GPU_ALLOWED,
             "writable": writable,
-            "sidecarDir": None if writable else str(_localSidecarDir())}
+            "sidecarDir": None if writable else str(LOCAL_SIDECARS)}
 
 
 @app.post("/api/mediaRoot")
@@ -890,17 +892,20 @@ def searchAll(q: str):
     results = []
     if not root.is_dir():
         return results
-    # sidecars beside the media, plus any written to the per-user fallback
-    found = [(p, root) for p in _mediaFiles(root, "*_transcript.json")]
-    localDir = _localSidecarDir()
-    if localDir.is_dir():
-        found += [(p, localDir) for p in localDir.rglob("*_transcript.json")]
-    for path, base in sorted(found, key=lambda pair: str(pair[0])):
+    # Walk the media files and resolve each one's transcript, so a sidecar in
+    # either location is found and the stem always matches a real recording.
+    media = [f for f in _mediaFiles(root)
+             if f.is_file() and f.suffix.lower() in MEDIA_EXTS
+             and not f.name.endswith(CONVERTED_SUFFIX)]
+    for f in sorted(media, key=lambda p: str(p)):
+        stem = f.relative_to(root).with_suffix("").as_posix()
+        path = _transcriptPath(stem)
+        if not path.exists():
+            continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        stem = path.relative_to(base).as_posix()[:-len("_transcript.json")]
         for seg in data.get("segments", []):
             if q in seg["text"].lower():
                 results.append({
@@ -1335,7 +1340,7 @@ def _serve(portOverride=None, root=None, force=False):
     _writeLock(port)
     if _mediaRoot().is_dir() and not _mediaRootWritable():
         print(f"NOTE: {_mediaRoot()} is not writable — transcripts will be "
-              f"saved to\n      {_localSidecarDir()}", flush=True)
+              f"saved to\n      {LOCAL_SIDECARS}", flush=True)
     print(f"{APP_NAME} v{APP_VERSION} — model={MODEL_SIZE} "
           f"({'gpu' if _useGpu() else 'cpu'})  "
           f"media={_mediaRoot()}\n  config={CONFIG_DIR}  {url}\n"

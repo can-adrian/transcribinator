@@ -14,7 +14,7 @@ some other program, the next free one is used. Stop it with the the app's ⏻
 button, or by closing the console.
 
 The startup line reports the version and active media root, e.g.
-`Transcribinator v1.20.0 — model=medium  media=D:\shows\...`.
+`Transcribinator v1.20.1 — model=medium  media=D:\shows\...`.
 
 For a step-by-step walkthrough aimed at someone installing this for the first
 time on a studio workstation, see `local_install_instructions.txt`.
@@ -173,8 +173,10 @@ less room; double-click it to reset. The height is remembered per browser.
 
 **Read-only media folders**: transcripts normally sit next to the movie so
 they travel with it. If the media folder cannot be written to, they are saved
-to a per-user folder instead (`<config>/sidecars/<root name>-<id>/`), keyed by
-media root, and the sidebar says so. Everything works the same — search,
+to a per-user folder instead (`<config>/sidecars/`), named after the movie
+rather than its path, and the sidebar says so. Keying on the file name means
+they are still found if the media root is later opened at a different level,
+so it relies on leaf file names being unique. Everything works the same — search,
 annotations, subtitles — but those transcripts do not travel with the media.
 A sidecar found next to the movie always wins over a local copy, so a
 colleague's transcript is still picked up.
