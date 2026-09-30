@@ -28,6 +28,7 @@ Nothing is written inside the install directory, so this can be deployed as a
 read-only package (e.g. a rez release).
 """
 import getpass
+import hashlib
 import json
 import os
 import queue
@@ -147,7 +148,7 @@ os.environ.setdefault("ARGOS_CHUNK_TYPE", "MINISBD")
 # working CUDA stack. Set TRANSCRIBINATOR_ALLOW_GPU=1 to expose the checkbox.
 GPU_ALLOWED = bool(_env("ALLOW_GPU"))
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
-APP_VERSION = "1.19.2"
+APP_VERSION = "1.20.0"
 
 app = FastAPI(title=APP_NAME)
 
@@ -223,9 +224,65 @@ except OSError:
     pass                    # read-only install root: user picks a root in the UI
 
 
+# ---- sidecar placement -----------------------------------------------------
+# Sidecars normally sit next to the movie so they travel with it. When the
+# media folder is read-only (a locked-down show drive, someone else's area)
+# they go to a per-user folder instead, keyed by media root so two roots
+# cannot collide. Reading always prefers a sidecar beside the media, so a
+# colleague's transcript is still picked up.
+LOCAL_SIDECARS = CONFIG_DIR / "sidecars"
+_writableCache = {}
+
+
+def _folderWritable(folder):
+    """Can we create files here? Probed once per folder, then remembered."""
+    key = str(folder)
+    if key not in _writableCache:
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            probe = folder / f".transcribinator_write_test_{os.getpid()}"
+            probe.write_text("x", encoding="utf-8")
+            probe.unlink()
+            _writableCache[key] = True
+        except OSError:
+            _writableCache[key] = False
+    return _writableCache[key]
+
+
+def _localSidecarDir(root=None):
+    root = root or _mediaRoot()
+    key = hashlib.sha1(str(root).encode("utf-8")).hexdigest()[:12]
+    return LOCAL_SIDECARS / f"{root.name or 'root'}-{key}"
+
+
+def _mediaRootWritable():
+    return _folderWritable(_mediaRoot())
+
+
+def _safeSidecar(path):
+    """Guard for sidecar paths: beside the media, or in the local fallback."""
+    return (_safeUnder(_mediaRoot(), path)
+            or _safeUnder(_localSidecarDir(), path))
+
+
+def _sidecarPath(stem, suffix):
+    """Where this sidecar is, or should be written.
+
+    An existing file wins (beside the media first), otherwise the media folder
+    if we can write there, otherwise the per-user fallback.
+    """
+    beside = _mediaRoot() / f"{stem}{suffix}"
+    if beside.exists():
+        return beside
+    local = _localSidecarDir() / f"{stem}{suffix}"
+    if local.exists():
+        return local
+    return beside if _folderWritable(beside.parent) else local
+
+
 # stem = media file's path relative to the root, forward slashes, no extension
 def _transcriptPath(stem):
-    return _mediaRoot() / f"{stem}_transcript.json"
+    return _sidecarPath(stem, "_transcript.json")
 
 
 # human-readable sidecar format: header fields, then one line per segment /
@@ -265,6 +322,7 @@ def _dumpTranscript(data):
 
 
 def _writeTranscript(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_dumpTranscript(data), encoding="utf-8")
 
 
@@ -589,7 +647,7 @@ def startTranslate(stem: str, lang: str):
     if lang not in SUB_LANGS:
         raise HTTPException(400, f"lang must be one of {list(SUB_LANGS)}")
     path = _transcriptPath(stem)
-    if not _safeUnder(_mediaRoot(), path) or not path.exists():
+    if not _safeSidecar(path) or not path.exists():
         raise HTTPException(404, "no transcript for this recording")
     data = json.loads(path.read_text(encoding="utf-8"))
     if lang in data.get("translations", {}):
@@ -624,7 +682,7 @@ _convQueue = queue.Queue()
 
 
 def _convertedPath(stem):
-    return _mediaRoot() / f"{stem}{CONVERTED_SUFFIX}"
+    return _sidecarPath(stem, CONVERTED_SUFFIX)
 
 
 def _mediaDuration(path):
@@ -639,6 +697,7 @@ def _mediaDuration(path):
 
 def _runConvert(src, dst, label, onProgress=None):
     """Transcode any file to a browser-playable h264 mp4. Raises on failure."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
     tmp = dst.with_suffix(".part.mp4")
     try:
         dur = _mediaDuration(src)
@@ -732,9 +791,12 @@ def convertStatus(stem: str):
 def getMediaRoot():
     """Media root plus the other app-wide settings the sidebar shows."""
     root = _mediaRoot()
+    writable = root.is_dir() and _mediaRootWritable()
     return {"path": str(root.resolve()), "exists": root.is_dir(),
             "recursive": _recursive(), "useGpu": _useGpu(),
-            "gpuLocked": not GPU_ALLOWED}
+            "gpuLocked": not GPU_ALLOWED,
+            "writable": writable,
+            "sidecarDir": None if writable else str(_localSidecarDir())}
 
 
 @app.post("/api/mediaRoot")
@@ -760,6 +822,7 @@ async def setMediaRoot(request: Request):
         raise HTTPException(400, "nothing to update")
     _writeCfg(**updates)
     _status.clear()
+    _writableCache.clear()          # re-probe: this may be a different folder
     return getMediaRoot()
 
 
@@ -813,7 +876,7 @@ def startTranscribe(relPath: str):
 @app.get("/api/transcript/{stem:path}")
 def getTranscript(stem: str):
     path = _transcriptPath(stem)
-    if not _safeUnder(_mediaRoot(), path) or not path.exists():
+    if not _safeSidecar(path) or not path.exists():
         raise HTTPException(404, "no transcript")
     return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
 
@@ -827,10 +890,18 @@ def searchAll(q: str):
     results = []
     if not root.is_dir():
         return results
-    for path in sorted(_mediaFiles(root, "*_transcript.json")):
-        data = json.loads(path.read_text(encoding="utf-8"))
-        stem = path.relative_to(root).as_posix()[:-len("_transcript.json")]
-        for seg in data["segments"]:
+    # sidecars beside the media, plus any written to the per-user fallback
+    found = [(p, root) for p in _mediaFiles(root, "*_transcript.json")]
+    localDir = _localSidecarDir()
+    if localDir.is_dir():
+        found += [(p, localDir) for p in localDir.rglob("*_transcript.json")]
+    for path, base in sorted(found, key=lambda pair: str(pair[0])):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        stem = path.relative_to(base).as_posix()[:-len("_transcript.json")]
+        for seg in data.get("segments", []):
             if q in seg["text"].lower():
                 results.append({
                     "file": data["file"],
@@ -925,7 +996,7 @@ def whoami():
 @app.post("/api/annotations/{stem:path}")
 async def setAnnotations(stem: str, request: Request):
     path = _transcriptPath(stem)
-    if not _safeUnder(_mediaRoot(), path) or not path.exists():
+    if not _safeSidecar(path) or not path.exists():
         raise HTTPException(404, f"no transcript file found: {path.name}")
     annos = await request.json()
     if not isinstance(annos, list) or not all(
@@ -1262,6 +1333,9 @@ def _serve(portOverride=None, root=None, force=False):
         print(f"WARNING: index.html not found in {ROOT / 'static'} or {ROOT} — "
               "the page will not load until it is in one of those.", flush=True)
     _writeLock(port)
+    if _mediaRoot().is_dir() and not _mediaRootWritable():
+        print(f"NOTE: {_mediaRoot()} is not writable — transcripts will be "
+              f"saved to\n      {_localSidecarDir()}", flush=True)
     print(f"{APP_NAME} v{APP_VERSION} — model={MODEL_SIZE} "
           f"({'gpu' if _useGpu() else 'cpu'})  "
           f"media={_mediaRoot()}\n  config={CONFIG_DIR}  {url}\n"

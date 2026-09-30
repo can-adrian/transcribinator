@@ -56,6 +56,10 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 #rootStatus{font:10.5px var(--mono);color:#e0a97a;padding:2px 14px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #rootStatus:empty{display:none}
+#rootNotice{font:10.5px var(--mono);color:var(--dim);padding:2px 14px 0;
+  line-height:1.45;cursor:help}
+#rootNotice:empty{display:none}
+#rootNotice b{color:var(--accent);font-weight:600}
 #fileFilter{margin:8px 12px 12px;padding:8px 10px;background:var(--bg);
   border:1px solid var(--line);border-radius:6px;color:var(--text);width:calc(100% - 24px)}
 #fileFilter:focus{outline:none;border-color:var(--accent-dim)}
@@ -242,6 +246,7 @@ mark.focusMatch{outline:2px solid var(--text)}
   <label id="recurseRow"><input type="checkbox" id="recurseChk" checked> Include subfolders</label>
   <label id="gpuRow"><input type="checkbox" id="gpuChk"> Use GPU for transcription</label>
   <div id="rootStatus"></div>
+  <div id="rootNotice"></div>
   <input id="fileFilter" placeholder="Filter recordings by name…" spellcheck="false">
   <div id="sideScroll">
     <div class="sideHead">Recordings</div>
@@ -348,6 +353,18 @@ async function loadMediaRoot(){
     $('rootStatus').textContent=d.exists?'':'folder not found: '+d.path;
     $('rootPath').placeholder=d.path;
     $('rootPath').title=d.path;
+    // read-only media folder: say where the transcripts are going instead
+    if(d.exists&&d.writable===false&&d.sidecarDir){
+      $('rootNotice').innerHTML='<b>read-only folder</b> \u2014 transcripts are '
+        +'saved to your local copy instead of next to the media';
+      $('rootNotice').title='Saving to '+d.sidecarDir
+        +'\nThey work exactly the same here, but will not travel with the '
+        +'media files. Move them next to the movies once the folder is '
+        +'writable if you want to share them.';
+    }else{
+      $('rootNotice').textContent='';
+      $('rootNotice').title='';
+    }
     $('recurseChk').checked=!!d.recursive;
     $('gpuChk').checked=!!d.useGpu;
     $('gpuChk').disabled=!!d.gpuLocked;
@@ -1072,7 +1089,7 @@ window.addEventListener('resize',()=>{
 /* ---------------- annotations ---------------- */
 let annotations=[];        // {time, text, user?} — persisted inside the transcript json
 let currentUser='';
-const EXPECTED_SERVER='1.19.2';
+const EXPECTED_SERVER='1.20.0';
 function setVersionLabel(v){
   $('verTag').textContent='v'+v;
   document.title='Transcribinator '+v;
